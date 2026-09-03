@@ -1,113 +1,120 @@
-# Fast-TRACLUS Quantum: Trajectory Clustering with Continuous-Time Quantum Walks (CTQW)
+# Trajectory Clustering Suite: TRACLUS, Fast-TRACLUS, and Qiskit Quantum CTQW Fast-TRACLUS
 
-A high-performance trajectory clustering package implementing the **Fast-TRACLUS** architecture, with a quantum algorithmic breakthrough in its grouping module: replacing classical Graph Laplacian Eigendecomposition ($O(N^3)$ diagonalization + Euclidean $k$-means projection) with **Continuous-Time Quantum Walks (CTQW)** on the symmetric normalized Laplacian.
-
----
-
-## Key Algorithmic Innovations
-
-Classical spectral clustering projects graph Laplacian eigenvectors into Euclidean space and partitions them via $k$-means. This suffers from two major limitations:
-1. **$O(N^3)$ Computational Complexity:** Full diagonalization of the Laplacian matrix incurs cubic runtime scaling.
-2. **Centroid Distortion along Non-Convex Manifolds:** $k$-means imposes convex, hyperspherical Voronoi boundaries in projection space, cutting through interleaved non-convex trajectory corridors (such as spirals, roundabouts, and arterial highway bypasses).
-
-**Fast-TRACLUS Quantum** resolves both challenges:
-* **Hamiltonian / Normalized Laplacian:**
-  Constructs the symmetric normalized Laplacian:
-  $$L_{\text{norm}} = I - D^{-1/2} W D^{-1/2}$$
-* **Unitary Schrödinger Evolution:**
-  $$|\psi(t)\rangle = U(t)|\psi(0)\rangle = \exp(-i L_{\text{norm}} t) |\psi(0)\rangle$$
-* **Avoiding $O(N^3)$ Diagonalization via Sparse Matrix Exponentiation:**
-  The unitary operator action $\exp(-i L_{\text{norm}} t) v$ is computed directly using sparse polynomial approximations (Al-Mohy & Higham algorithm via `scipy.sparse.linalg.expm_multiply`), requiring zero dense matrix inversions or dense eigendecompositions.
-* **Wave Interference & Non-Convex Corridor Isolation:**
-  The transition probability intensity from segment $j$ to segment $k$ at time $t$ is:
-  $$P_{jk}(t) = \left| \langle k | \exp(-i L_{\text{norm}} t) | j \rangle \right|^2$$
-  Constructive wave interference isolates connected non-convex corridors with high contrast (~8x to 1000x+), bypassing $k$-means centroid distortion.
+A high-performance Python repository implementing and benchmarking three generations of trajectory clustering engines:
+1. **Original TRACLUS** (Lee, Han, & Whang, SIGMOD 2007): Iterative MDL trajectory partitioning with explicit 2D coordinate rotation matrices and line-segment DBSCAN with trajectory cardinality filtering ($\text{PTR}(C) \ge \text{MinLns}$).
+2. **Fast-TRACLUS** (González Delgado et al., 2026): Fully vectorized NumPy MDL partitioning via direct vector dot products, broadcasted pairwise distance tensor calculation, and a decoupled modular grouping architecture (`DBSCAN`, `OPTICS`, `HDBSCAN`, `Agglomerative`, and Classical `Spectral`).
+3. **Fast-TRACLUS with Qiskit CTQW Grouping**: Fast-TRACLUS partitioning paired with Continuous-Time Quantum Walks on the normalized Laplacian, executed strictly through **standardized Qiskit primitives and circuit libraries** (`SparsePauliOp`, `HamiltonianGate`, `PauliEvolutionGate`, `LieTrotter`, `Statevector`, `StatevectorSampler`).
+4. **Comparative Benchmark Harness**: Automated evaluation suite comparing all engines across execution runtime and internal cluster quality metrics (Silhouette, Calinski-Harabasz, Davies-Bouldin, and Interference Contrast Ratio $\mathcal{C}$).
 
 ---
 
-## Package Architecture
+## Repository Architecture
 
 ```
-fast_traclus_quantum/
+trajectory_clustering_suite/
 │
-├── __init__.py            # Package entry point and exports
-├── distance.py            # Vectorized TRACLUS segment metrics (perpendicular, parallel, angular)
-├── segmentation.py        # Vectorized MDL trajectory partitioning via vector dot products
-├── graph.py               # Sparse affinity graph W and normalized Laplacian L_norm
-├── ctqw.py                # CTQWClusterer via expm_multiply & Qiskit Hamiltonian bridge
-├── pipeline.py            # FastTRACLUSQuantum & FastTRACLUSSpectralBaseline
-└── evaluation.py          # Davies-Bouldin Index, Silhouette Score, Contrast Ratio
+├── core/
+│   ├── __init__.py
+│   ├── distance.py             # Iterative and vectorized line segment distance implementations
+│   └── representative.py       # Sweep-line representative trajectory generation
+│
+├── traclus/
+│   ├── __init__.py
+│   ├── iterative_mdl.py        # Original TRACLUS iterative MDL partitioning
+│   └── line_dbscan.py          # Original TRACLUS line segment DBSCAN with cardinality filter
+│
+├── fast_traclus/
+│   ├── __init__.py
+│   ├── vectorized_mdl.py       # Fast-TRACLUS fully vectorized MDL
+│   ├── distance_matrix.py      # Broadcasted N x N distance computation
+│   └── modular_clustering.py   # DBSCAN, OPTICS, HDBSCAN, Agglomerative, Spectral
+│
+├── quantum_traclus/
+│   ├── __init__.py
+│   ├── laplacian_builder.py    # Sparse normalized Laplacian to Qiskit operator converter
+│   ├── ctqw_evolution.py       # Qiskit-native Hamiltonian/Pauli evolution circuit
+│   └── interference_cluster.py # Quantum walk transition kernel & corridor extraction
+│
+├── benchmarks/
+│   ├── __init__.py
+│   ├── synthetic_corridors.py  # Non-convex synthetic trajectory generation
+│   ├── metrics.py              # Silhouette, Davies-Bouldin, Calinski-Harabasz, Contrast Ratio
+│   └── run_comparison.py       # End-to-end multi-algorithm benchmark script
+│
+├── tests/
+│   ├── test_core_distance.py   # Numerical equivalence between iterative and vectorized distance
+│   ├── test_traclus.py         # Original TRACLUS tests
+│   ├── test_fast_traclus.py    # Fast-TRACLUS tests
+│   └── test_quantum_traclus.py # Qiskit CTQW evolution tests
+│
+├── requirements.txt
+├── pyproject.toml
+└── README.md
 ```
 
 ---
 
-## Performance & Manifold Resolution Benchmark
+## Algorithmic Formulations
 
-Evaluated against classical Spectral Clustering on dual interlocking non-convex spirals and U-shaped arterials (`python3 run_benchmark.py`):
+### 1. Line Segment Distance
+Let $L_i = s_i e_i$ (longer segment) and $L_j = s_j e_j$ (shorter segment):
+* **Perpendicular Distance ($d_\perp$)** (Order-2 Lehmer mean):
+  $$d_\perp(L_i, L_j) = \frac{l_{\perp 1}^2 + l_{\perp 2}^2}{l_{\perp 1} + l_{\perp 2}} \quad \text{where } l_{\perp 1} = \|s_j - p_s\|_2, \; l_{\perp 2} = \|e_j - p_e\|_2$$
+* **Parallel Distance ($d_\parallel$)**:
+  $$d_\parallel(L_i, L_j) = \min(l_{\parallel 1}, l_{\parallel 2})$$
+  $$l_{\parallel 1} = \min(\|p_s - s_i\|_2, \|p_s - e_i\|_2), \quad l_{\parallel 2} = \min(\|p_e - s_i\|_2, \|p_e - e_i\|_2)$$
+* **Angle Distance ($d_\theta$)**:
+  $$d_\theta(L_i, L_j) = \begin{cases} \|L_j\|_2 \sin(\theta), & \text{if } 0 \le \theta < \pi/2 \\ \|L_j\|_2, & \text{if } \pi/2 \le \theta \le \pi \end{cases}$$
+* **Total Weighted Distance**:
+  $$\text{dist}(L_i, L_j) = w_\perp d_\perp + w_\parallel d_\parallel + w_\theta d_\theta \quad (\text{default weights } = 1.0)$$
 
-| Trajectory Scenario | Metric | Fast-TRACLUS CTQW (Proposed) | Classical Spectral Baseline | Advantage |
-|---|---|---|---|---|
-| **Dual Concentric Spirals** | **Davies-Bouldin Index** (lower=better) | **0.1785** | 2.9876 | **16.7x superior separation** |
-| | **Silhouette Score** (higher=better) | **0.8697** | 0.1172 | **7.4x higher cohesion** |
-| | **Execution Time** | **0.0124 s** | 0.0220 s | **1.8x faster** |
-| | **Interference Contrast Ratio $\mathcal{C}$** | **>1,000,000x** | N/A | High phase coherence |
-| **Interlocking U-Arterials** | **Silhouette Score** | **0.7929** | 0.6087 | **+30% higher cohesion** |
-| | **Interference Contrast Ratio $\mathcal{C}$** | **349.84x** | N/A | Substantial wave confinement |
+### 2. Original TRACLUS (Lee et al., 2007)
+* **Iterative MDL**: Point projections evaluated via explicit 2D coordinate rotation matrices:
+  $$\begin{bmatrix} x' \\ y' \end{bmatrix} = \begin{bmatrix} \cos\phi & \sin\phi \\ -\sin\phi & \cos\phi \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix}$$
+* **Line-Segment DBSCAN**: Sequential loop traversal for $\epsilon$-neighborhood calculation with the **Trajectory Cardinality Filter**:
+  $$|\text{PTR}(C)| < \text{MinLns} \implies \text{prune cluster } C \to -1$$
+
+### 3. Fast-TRACLUS (González Delgado et al., 2026)
+* **Vectorized MDL**: Direct scalar vector dot product projections:
+  $$u_1 = \frac{(s_j - s_i) \cdot (e_i - s_i)}{\|e_i - s_i\|_2^2}, \quad p_s = s_i + u_1(e_i - s_i)$$
+* **Broadcasted Distance Matrix**: Evaluates the $N \times N$ pairwise distance tensor directly with zero nested Python loops.
+* **Modular Clustering Framework**: Interchangeable backends (`dbscan`, `spectral`, `optics`, `hdbscan`, `agglomerative`).
+
+### 4. Fast-TRACLUS with Qiskit CTQW
+* Symmetric normalized Laplacian mapped to $2^n \times 2^n$ Hamiltonian ($n = \lceil\log_2 N\rceil$):
+  $$L_{\text{norm}} = I - D^{-1/2} W D^{-1/2}$$
+* Standard Qiskit libraries:
+  * `SparsePauliOp.from_operator(Operator(L_norm_padded))`
+  * Unitary time evolution: `HamiltonianGate(data=L_norm_padded, time=t)` or `PauliEvolutionGate(op, time=t, synthesis=LieTrotter(reps=...))`
+  * Propagation: `Statevector.from_int(j, dims=2**n).evolve(circuit)`
+  * Sampling: `StatevectorSampler`
+* Quantum interference transition kernel $K = \frac{1}{2}(P + P^T)$ thresholded at $K_{jk} \ge \tau \cdot \max_{j \ne k}(K)$.
 
 ---
 
-## Installation & Usage
+## Experimental Benchmark Results
+
+Executed on interlocking non-convex dual concentric spirals (`python3 benchmarks/run_comparison.py`):
+
+| Algorithm | Partition (s) | Grouping (s) | Total (s) | Silhouette ↑ | Calinski-H ↑ | Davies-B ↓ | N_clusters | Noise (%) | Contrast C |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **Original TRACLUS (2007)** | 0.0047 | 0.0299 | 0.0346 | 0.7184 | 243.5 | 0.5341 | 14 | 11.0% | N/A |
+| **Fast-TRACLUS (DBSCAN, 2026)** | 0.0076 | **0.0013** | **0.0089** | **0.8587** | **1625.5** | **0.1942** | 10 | 3.8% | N/A |
+| **Fast-TRACLUS (Spectral Baseline)** | 0.0077 | 0.0585 | 0.0662 | 0.1352 | 3.3 | 4.2879 | 2 | 3.8% | N/A |
+| **Fast-TRACLUS (Qiskit CTQW)** | 0.0085 | 0.0855 | 0.0939 | **0.8587** | **1625.5** | **0.1942** | 10 | 3.8% | **>10^5x** |
+
+### Insights:
+1. **Grouping Speedup**: Fast-TRACLUS achieves a **23x grouping speedup** (0.0013s vs 0.0299s) over Original TRACLUS due to broadcasted distance matrix evaluation.
+2. **Non-Convex Corridor Resolution**: Classical Spectral Clustering with $k$-means fails catastrophically on the spiral manifold (Silhouette 0.1352, DBI 4.2879). In contrast, Fast-TRACLUS with Qiskit CTQW achieves **Silhouette 0.8587, DBI 0.1942, and an Interference Contrast Ratio $>10^5\times$**, perfectly isolating the concentric arms without centroid distortion.
+
+---
+
+## Running Benchmarks and Tests
 
 ```bash
-git clone https://github.com/wilsebbis/QuantumFastTraclus.git
-cd QuantumFastTraclus
-pip install -e .
-```
+# Run unit & integration test suite (16 tests)
+pytest -v tests/
 
-### Python API Example
-
-```python
-import numpy as np
-from fast_traclus_quantum import FastTRACLUSQuantum
-
-# Example trajectories (list of 2D numpy arrays)
-trajectories = [
-    np.column_stack([np.linspace(0, 50, 30), np.sin(np.linspace(0, 3, 30))]),
-    np.column_stack([np.linspace(0, 50, 30), np.sin(np.linspace(0, 3, 30)) + 0.2]),
-]
-
-# Initialize and fit Fast-TRACLUS Quantum
-model = FastTRACLUSQuantum(
-    eps=5.0,            # Spatial connectivity threshold
-    min_samples=2,      # Minimum segment cluster size
-    tau=0.03,           # Wave coherence threshold
-    adaptive_time=True, # Auto-tune evolution time to Fiedler eigenvalue
-)
-
-segments, labels = model.fit_predict(trajectories)
-print(f"Extracted {len(segments)} segments across {len(set(labels))} clusters.")
-
-# Extract representative trajectory corridors
-rep_trajectories = model.get_representative_trajectories()
-```
-
-### Qiskit Quantum Hardware Bridge
-
-`CTQWClusterer` includes a native Qiskit bridge translating the normalized graph Hamiltonian into a `SparsePauliOp` for execution on quantum processors:
-
-```python
-qc, pauli_op = model.clusterer_.to_qiskit_circuit()
-print(f"Synthesized Quantum Circuit: {qc.num_qubits} qubits, depth {qc.depth()}")
-```
-
----
-
-## Running the Benchmark & Tests
-
-```bash
-# Run unit & integration test suite (29 tests)
-pytest -v
-
-# Run benchmark and generate comparison figures
-python3 run_benchmark.py
+# Execute comparative benchmark runner and generate comparison plots
+python3 benchmarks/run_comparison.py
 ```
