@@ -20,6 +20,11 @@ A high-performance Python repository implementing, optimizing, and empirically b
 - [Installation & Quickstart](#installation--quickstart)
 - [Datasets: Included vs. External Downloads](#datasets-included-vs-external-downloads)
 - [Experimental Benchmarks & Results](#experimental-benchmarks--results)
+  - [Master Benchmark Table](#1-master-cross-model-benchmark-table-all-8-datasets)
+  - [Master Comparative Summary Dashboard](#2-master-comparative-summary-dashboard)
+  - [Visual Multi-Model Comparisons](#3-visual-multi-model-comparisons-across-all-8-datasets)
+  - [Replicated TRACLUS (SIGMOD 2007) Figures](#4-replicated-empirical-figures-from-traclus-sigmod-2007)
+  - [Standalone Non-Convex Benchmark](#5-standalone-non-convex-benchmark-spirals--manifolds)
 - [Fast-TRACLUS vs. Quantum Fast-TRACLUS: Detailed Comparison](#fast-traclus-vs-quantum-fast-traclus-detailed-comparison)
 - [Quantum Algorithmic Architecture: Adaptations, Traits, and APIs](#quantum-algorithmic-architecture-adaptations-traits-and-apis)
 - [Why Alternative Quantum Paradigms Are Inferior](#why-alternative-quantum-paradigms-are-inferior)
@@ -326,11 +331,108 @@ Executed across all three engines on Apple Silicon (M-series, Python 3.14, Qiski
 
 ---
 
-### 2. Key Empirical Insights
-1. **Vectorized MDL Partitioning Speedup**: On dense trajectory sets like GeoLife (91,629 points), Fast-TRACLUS partitions in **1.291s** vs. **26.043s** for Original TRACLUS — achieving a **$20.1\times$ speedup** (a $95.0\%$ runtime reduction).
-2. **Extreme Quantum Interference Contrast**: CTQW transition probabilities concentrate sharply along connected manifold pathways, achieving contrast ratios $\mathcal{C} = \frac{\langle K_{\text{intra}} \rangle}{\langle K_{\text{inter}} \rangle} > 10^5\times$ on telemetry networks. On Elk1993, CTQW resolves 7 distinct movement passages where Original TRACLUS merges all segments into a single cluster.
-3. **Robust Noise Suppression**: On the synthetic corridor benchmark with 25% random noise, both Fast-TRACLUS and Quantum Fast-TRACLUS filter out **24.3% noise**, cleanly isolating all 4 true linear passages.
-4. **Qiskit-Native Performance**: Standardized Qiskit `HamiltonianGate` matrix operations execute graphs with over 1,200 segments in **~1.1s**, eliminating custom exponential loop overhead.
+### 2. Master Comparative Summary Dashboard
+
+![Master Comparative Summary Dashboard](figures/master_all_models_summary.png)
+
+> [!TIP]
+> **Key Architecture Highlights**:
+> 1. **Vectorized MDL Partitioning Speedup**: On dense trajectory sets like GeoLife (91,629 points), Fast-TRACLUS vectorized MDL partitions the input in **1.291s** compared to **26.043s** for Original TRACLUS — achieving a **$20.1\times$ wall-clock speedup** ($95.0\%$ runtime reduction).
+> 2. **Quantum Wave Interference Coherence**: The CTQW transition kernel exhibits extreme contrast ratios $\mathcal{C} = \frac{\langle K_{\text{intra}} \rangle}{\langle K_{\text{inter}} \rangle} > 10^5\times$, isolating tightly bound sub-corridors in complex animal telemetry (Elk: 7 distinct passages vs. 1 monolithic cluster in TRACLUS).
+> 3. **Native Qiskit Circuit Execution**: The quantum Hamiltonian evolution is evaluated natively through `qiskit.circuit.library.HamiltonianGate` and `qiskit.quantum_info.Operator` with adaptive Fiedler-value evolution time $t_{\text{walk}} = \frac{\pi}{2\sqrt{\lambda_2}}$.
+
+---
+
+### 3. Visual Multi-Model Comparisons Across All 8 Datasets
+
+Each dataset comparison displays a standardized 4-panel progression:
+* **Panel A**: Raw Input Trajectories
+* **Panel B**: Original TRACLUS (2007) Clustering & Representative Trajectories (Crimson)
+* **Panel C**: Fast-TRACLUS (2026) Clustering & Representative Trajectories (Royal Blue)
+* **Panel D**: Quantum Fast-TRACLUS (CTQW) Clustering & Representative Trajectories (Dark Orange) with inset CTQW probability interference transition matrix $P_{ij}(t)$ heatmap.
+
+#### Dataset 1: Hurricane Best Track (Atlantic 1950–2004)
+![Hurricane Best Track Comparison](figures/comparison_1_hurricane.png)
+*Scope: 570 trajectories, 17,736 GPS points recorded at 6-hourly intervals. Displays Atlantic coastal landfall arcs, Gulf trajectories, and open-ocean recurvature corridors.*
+
+---
+
+#### Dataset 2: Starkey Project Elk1993 Movement
+![Elk1993 Movement Comparison](figures/comparison_2_elk1993.png)
+*Scope: 33 elk radio-telemetry trajectories in northeastern Oregon (9,452 points). CTQW isolates 7 distinct foraging and migration passages with $>10^5\times$ interference contrast, overcoming DBSCAN chaining.*
+
+---
+
+#### Dataset 3: Starkey Project Deer1995 Movement
+![Deer1995 Movement Comparison](figures/comparison_3_deer1995.png)
+*Scope: 32 mule deer trajectories (5,028 points). Isolates 3 major seasonal migration corridors along riparian valley channels (Silhouette $0.443$, DBI $0.818$, $\mathcal{C} > 10^5\times$).*
+
+---
+
+#### Dataset 4: Synthetic Corridors with 25% Background Noise
+![Synthetic Noise Suppression](figures/comparison_4_synthetic_noise.png)
+*Scope: 4 directional corridors injected with 25% uniform random noise trajectories (200 trajectories, 3,724 points). Both Fast-TRACLUS and Quantum CTQW achieve a Silhouette score of $0.924$ and filter exactly $24.3\%$ noise.*
+
+---
+
+#### Dataset 5: Porto Urban Taxi Trips
+![Porto Urban Taxi Comparison](figures/comparison_5_taxi.png)
+*Scope: 100 urban GPS traces from Porto, Portugal (4,073 points). Captures arterial avenue transit flow in milliseconds ($0.043\text{s}$ partitioning, $0.003\text{s}$ grouping).*
+
+---
+
+#### Dataset 6: Movebank Wildlife Tracking
+![Movebank Wildlife Tracking Comparison](figures/comparison_6_movebank.png)
+*Scope: 100 animal migration trajectories with 25,115 GPS fixes. Isolates 3 multi-individual migration paths across long-distance geographic terrain.*
+
+---
+
+#### Dataset 7: GeoLife Pedestrian Mobility
+![GeoLife Pedestrians Comparison](figures/comparison_7_geolife.png)
+*Scope: 100 high-frequency human mobility trajectories with 91,629 points. Fast-TRACLUS achieves a massive $20.1\times$ partition speedup ($1.291\text{s}$ vs. $26.043\text{s}$).*
+
+---
+
+#### Dataset 8: Dual Concentric Interlocking Spirals (Non-Convex Manifolds)
+![Dual Spirals Comparison](figures/comparison_8_dual_spirals.png)
+*Scope: 16 non-convex Archimedean spiraling corridors. Quantum walk interference preserves topological continuity along winding branches without centroid distortion ($\mathcal{C} = 5,017\times$, Silhouette $0.855$).*
+
+---
+
+### 4. Replicated Empirical Figures from TRACLUS (SIGMOD 2007)
+
+For direct validation against the foundational 2007 literature (*Lee, Han, & Whang*, SIGMOD 2007), all original empirical figures were replicated from the source datasets:
+
+#### Figures 16–18: Hurricane Best Track Analysis (SIGMOD 2007)
+| Figure 16: Parameter Entropy Sweep | Figure 17: QMeasure vs. Cluster Count | Figure 18: Discovered Spatial Corridors |
+| :---: | :---: | :---: |
+| ![Fig 16: Hurricane Entropy](figures/fig16_hurricane_entropy.png) | ![Fig 17: Hurricane QMeasure](figures/fig17_hurricane_qmeasure.png) | ![Fig 18: Hurricane Spatial Clusters](figures/fig18_hurricane_spatial_clusters.png) |
+
+*Figure 16 computes the entropy curve across varying $\epsilon$ radii to locate the optimal threshold. Figure 17 traces cluster quality via QMeasure. Figure 18 plots the resulting 7 hurricane clusters alongside their representative trajectories.*
+
+#### Figures 19–21: Starkey Elk1993 Movement Analysis (SIGMOD 2007)
+| Figure 19: Parameter Entropy Sweep | Figure 20: QMeasure vs. Cluster Count | Figure 21: Discovered Spatial Corridors |
+| :---: | :---: | :---: |
+| ![Fig 19: Elk Entropy](figures/fig19_elk_entropy.png) | ![Fig 20: Elk QMeasure](figures/fig20_elk_qmeasure.png) | ![Fig 21: Elk Spatial Clusters](figures/fig21_elk_spatial_clusters.png) |
+
+*Figure 19 demonstrates entropy stabilization on Starkey radio-telemetry. Figure 20 displays the QMeasure curve across cluster cardinality. Figure 21 shows the 13 discovered animal movement corridors.*
+
+#### Figures 22–23: Starkey Deer1995 & Synthetic Noise Suppression (SIGMOD 2007)
+| Figure 22: Deer1995 Major Movement Corridors | Figure 23: Synthetic Noise Filtering (25% Noise) |
+| :---: | :---: |
+| ![Fig 22: Deer Spatial Clusters](figures/fig22_deer_spatial_clusters.png) | ![Fig 23: Synthetic Noise Suppression](figures/fig23_synthetic_noise_suppression.png) |
+
+*Figure 22 plots the 2 primary migration passages discovered in mule deer telemetry. Figure 23 illustrates the clean removal of 25% uniform random noise while preserving the 4 underlying trajectory corridors.*
+
+---
+
+### 5. Standalone Non-Convex Benchmark: Spirals & Manifolds
+
+| Dual Archimedean Spirals Benchmark | Fast-TRACLUS Backend Benchmark |
+| :---: | :---: |
+| ![Benchmarks Comparison](benchmarks_comparison.png) | ![Benchmark Results](benchmark_results.png) |
+
+*Left: Standalone empirical comparison demonstrating how classical spectral clustering fails on non-convex manifolds due to Voronoi hyperplanes, whereas CTQW quantum interference smoothly traces the spiral geometry. Right: Comprehensive backend benchmark across Taxi, Movebank, and GeoLife.*
 
 ---
 
