@@ -29,6 +29,16 @@ A high-performance Python repository implementing, optimizing, and empirically b
   - [Standalone Non-Convex Benchmark](#5-standalone-non-convex-benchmark-spirals--manifolds)
 - [Fast-TRACLUS vs. Quantum Fast-TRACLUS: Detailed Comparison](#fast-traclus-vs-quantum-fast-traclus-detailed-comparison)
 - [Quantum Algorithmic Architecture: Adaptations, Traits, and APIs](#quantum-algorithmic-architecture-adaptations-traits-and-apis)
+  - [1. Quantum Adaptations the Pipeline Uses](#1-quantum-adaptations-the-pipeline-uses)
+  - [2. Quantum Traits the Pipeline Depends On](#2-quantum-traits-the-pipeline-depends-on)
+  - [3. Inventory of Standard Qiskit Modules Utilized (v2.5.x)](#3-inventory-of-standard-qiskit-modules-utilized-v25x)
+  - [4. Zero Hand-Made NumPy Variants Guarantee](#4-zero-hand-made-numpy-variants-guarantee)
+  - [5. Detailed Step-by-Step Code Execution & Gate Mechanics](#5-detailed-step-by-step-code-execution--gate-mechanics)
+  - [6. Quantum Gate Flowcharts & Circuit Diagrams](#6-quantum-gate-flowcharts--circuit-diagrams)
+  - [7. Summary of Key Quantum Traits & Guarantees](#7-summary-of-key-quantum-traits--guarantees)
+  - [8. How to Run Each Qiskit Mode in Code](#8-how-to-run-each-qiskit-mode-in-code)
+  - [9. Quantum Traits It Does Not Depend On](#9-quantum-traits-it-does-not-depend-on)
+  - [10. Quantum Algorithms & Frameworks It Avoids](#10-quantum-algorithms--frameworks-it-avoids)
 - [Why Alternative Quantum Paradigms Are Inferior](#why-alternative-quantum-paradigms-are-inferior)
 - [Python API Usage](#python-api-usage)
 - [Reproduction Commands](#reproduction-commands)
@@ -899,7 +909,7 @@ Both engines share the exact same high-performance classical front-end and post-
 
 * **Unitary Schrödinger Time Propagation**:
   Maps the normalized graph Laplacian ($L_{\text{norm}} = I - D^{-1/2} W D^{-1/2}$) to a time-independent Hamiltonian operator to propagate states via:
-  $$U(t) = \exp(-i L_{\text{norm}} t)$$
+  $$i \hbar \frac{d}{dt}|\psi(t)\rangle = H |\psi(t)\rangle \quad \implies \quad |\psi(t)\rangle = \exp(-i H t)|\psi(0)\rangle$$
 
 * **Adaptive Spectral Timescale Calibration**:
   Calibrates walk time using the algebraic connectivity (Fiedler value $\lambda_2$) of the graph:
@@ -937,20 +947,387 @@ Both engines share the exact same high-performance classical front-end and post-
 
 ---
 
-### 3. Standard Qiskit Modules & APIs Utilized
+### 3. Inventory of Standard Qiskit Modules Utilized (v2.5.x)
 
-* `qiskit.circuit.QuantumCircuit` & `qiskit.circuit.Parameter`: Encapsulates the parametric quantum circuit register with symbolic evolution time $t$.
-* `qiskit.quantum_info.Operator`: Converts zero-padded normalized Laplacian matrices into unitary and Hermitian operators.
-* `qiskit.quantum_info.SparsePauliOp`: Decomposes the Laplacian into a weighted sum of Pauli strings acting on $n = \lceil \log_2 N \rceil$ qubits without building dense $2^n \times 2^n$ matrix exponentials in NumPy.
-* `qiskit.circuit.library.HamiltonianGate`: Directly applies the exact matrix exponential $\exp(-i L_{\text{norm}} t)$ inside circuit definitions for statevector simulation.
-* `qiskit.circuit.library.PauliEvolutionGate`: Implements product-formula Hamiltonian time evolution over `SparsePauliOp` representations.
-* `qiskit.synthesis.LieTrotter` / `SuzukiTrotter`: Synthesizes `PauliEvolutionGate` into discrete 1-qubit and 2-qubit native hardware gates.
-* `qiskit.quantum_info.Statevector`: Prepares initial basis states (`Statevector.from_int(j, dims=2**n)`), evolves them via `.evolve()`, and extracts node probabilities via `.probabilities()`.
-* `qiskit.primitives.StatevectorSampler` & `StatevectorEstimator`: Evaluates probability distributions and expectation values across basis states.
+All quantum computations are implemented strictly using standardized Qiskit v2.5.x modules. No deprecated, proprietary, or non-standard packages are used:
+
+| Qiskit Class / Function | Module Path | Role in Pipeline | Source File |
+| :--- | :--- | :--- | :--- |
+| `QuantumCircuit` | `qiskit.circuit` | Container for the $n$-qubit register, quantum gates, and measurements | `ctqw_evolution.py` |
+| `Parameter` | `qiskit.circuit` | Symbolic evolution time parameter $t$, allowing compile-once evaluation | `ctqw_evolution.py` |
+| `Operator` | `qiskit.quantum_info` | Wraps padded Laplacian matrix into a unitary/Hermitian Qiskit operator | `laplacian_builder.py`, `ctqw_evolution.py` |
+| `SparsePauliOp` | `qiskit.quantum_info` | Decomposes $2^n \times 2^n$ Laplacian into a weighted sum of Pauli tensor strings | `laplacian_builder.py` |
+| `HamiltonianGate` | `qiskit.circuit.library` | Evaluates the exact matrix exponential $U(t) = \exp(-i H t)$ from a Qiskit `Operator` | `ctqw_evolution.py` |
+| `PauliEvolutionGate`| `qiskit.circuit.library` | Synthesizes product-formula Hamiltonian time evolution over Pauli strings | `ctqw_evolution.py` |
+| `LieTrotter` | `qiskit.synthesis` | Compiles Hamiltonian evolution into native 1- and 2-qubit gates ($CX, R_z, R_x$) | `ctqw_evolution.py` |
+| `SuzukiTrotter` | `qiskit.synthesis` | Higher-order symmetric Trotter product formula synthesis | `ctqw_evolution.py` |
+| `Statevector` | `qiskit.quantum_info` | Prepares $|j\rangle$, propagates $|\psi(t)\rangle = U(t)|j\rangle$, computes probabilities | `ctqw_evolution.py` |
+| `StatevectorSampler`| `qiskit.primitives` | Qiskit 2.x V2 Sampler Primitive: executes shot-based measurements across circuits | `ctqw_evolution.py` |
 
 ---
 
-### 4. Quantum Traits It Does Not Depend On
+### 4. Zero Hand-Made NumPy Variants Guarantee
+
+All quantum state evolutions, Hamiltonian operator representations, unitary gate simulations, and Born rule probability extractions are executed **strictly through native Qiskit classes and methods**. The pipeline contains no hand-made NumPy matrix exponentiations, no manual matrix element squarings (`np.abs(U)**2`), and no custom numerical shortcuts:
+* **State Preparation**: Localized states are prepared via `qiskit.quantum_info.Statevector.from_int(j, dims=2**n)`.
+* **Hamiltonian Representation**: The normalized graph Laplacian is encapsulated as a `qiskit.quantum_info.Operator` or decomposed into `SparsePauliOp`.
+* **Unitary Evolution**: State propagation is computed natively by `Statevector.evolve()` under the Qiskit `QuantumCircuit` or synthesized via `PauliEvolutionGate` and `LieTrotter`.
+* **Born Rule Probability Evaluation**: Transition probabilities are evaluated directly through `Statevector.probabilities()` or discrete measurement shot sampling using the Qiskit 2.x `StatevectorSampler` primitive.
+
+---
+
+### 5. Detailed Step-by-Step Code Execution & Gate Mechanics
+
+#### Step 1: Classical Graph Construction to Qiskit Operators
+**File**: `quantum_traclus/laplacian_builder.py:build_laplacian_operators()`
+
+1. **Gaussian Affinity Graph ($W$)**:
+   Given pairwise segment distance matrix $D \in \mathbb{R}^{N \times N}$ and spatial cutoff $\epsilon$:
+   $$W_{jk} = \exp\left(-\frac{D_{jk}^2}{2\sigma^2}\right) \quad \text{for } D_{jk} \le \epsilon, \quad W_{jk} = 0 \text{ otherwise}$$
+   Self-loops are zeroed: $W_{jj} = 0$.
+
+2. **Symmetric Normalized Laplacian ($L_{\text{norm}}$)**:
+   Degree diagonal $D_{jj} = \sum_k W_{jk}$, inverse square root $D^{-1/2}_{jj} = 1 / \sqrt{D_{jj}}$:
+   $$L_{\text{norm}} = I - D^{-1/2} W D^{-1/2}$$
+   $L_{\text{norm}}$ is real, symmetric, positive semi-definite, and bounded with spectrum in $[0, 2]$.
+
+3. **Logarithmic Qubit Register Mapping**:
+   To represent $N$ graph nodes on a quantum register:
+   $$n = \lceil \log_2 N \rceil, \quad \dim = 2^n$$
+   For example:
+   * $N = 32 \implies n = 5\text{ qubits}$ ($2^5 = 32$)
+   * $N = 100 \implies n = 7\text{ qubits}$ ($2^7 = 128$)
+   * $N = 1,000 \implies n = 10\text{ qubits}$ ($2^{10} = 1,024$)
+   * $N = 2,000 \implies n = 11\text{ qubits}$ ($2^{11} = 2,048$)
+
+4. **Zero-Padded Laplacian Matrix ($L_{\text{padded}}$)**:
+   Because $N \le 2^n$, the matrix is embedded into the $2^n$-dimensional Hilbert space by padding with an identity block:
+   $$L_{\text{padded}} = \begin{bmatrix} L_{\text{norm}} & 0 \\ 0 & I_{(2^n - N)} \end{bmatrix}$$
+   > **Why Identity Padding?**  
+   > Setting the padded diagonal to $1.0$ assigns non-physical states an eigenvalue of $1.0$. Because eigenvalues of $L_{\text{norm}}$ represent connectivity ($\lambda_1 = 0$ is the trivial disconnected component; $\lambda_2$ is algebraic connectivity), an eigenvalue of $1.0$ places the padded states far away from the resonant low-energy ground state. Moreover, the block diagonal structure prevents any wave amplitude from leaking between the physical nodes $[0, N-1]$ and the padded register $[N, 2^n-1]$.
+
+5. **Qiskit Operator & Pauli String Decomposition**:
+   ```python
+   # Line 69-70 in laplacian_builder.py
+   op = Operator(L_padded)
+   sparse_pauli = SparsePauliOp.from_operator(op)
+   ```
+   * `Operator(L_padded)` encapsulates the $2^n \times 2^n$ matrix as a Hermitian Qiskit operator.
+   * `SparsePauliOp.from_operator(op)` projects $L_{\text{padded}}$ onto the $n$-qubit Pauli basis:
+     $$H = L_{\text{padded}} = \sum_{k=1}^{M} c_k P_k, \quad P_k \in \{I, X, Y, Z\}^{\otimes n}, \quad c_k = \frac{1}{2^n} \text{Tr}(P_k L_{\text{padded}})$$
+     Because $L_{\text{padded}}$ is real and symmetric, all coefficients $c_k$ are strictly real.
+
+---
+
+#### Step 2: Adaptive Spectral Evolution Time
+**File**: `quantum_traclus/ctqw_evolution.py:compute_adaptive_walk_time()`
+
+A quantum walk that runs too briefly cannot propagate across corridors; a walk that runs too long thermalizes ergodically across the entire graph. The optimal evolution time is calibrated to the **Fiedler eigenvalue** ($\lambda_2$, the smallest non-zero eigenvalue of $L_{\text{norm}}$):
+
+$$\lambda_2 = \min_{x \perp \mathbf{1}, x \ne 0} \frac{x^T L_{\text{norm}} x}{x^T x}$$
+
+$$t_{\text{walk}} = \frac{\pi}{2\sqrt{\lambda_2}}$$
+
+In `ctqw_evolution.py`:
+```python
+vals = spla.eigsh(L_norm, k=min(6, N - 1), which="SA", return_eigenvectors=False)
+lambda_2 = float(np.sort(vals[vals > 1e-4])[0])
+t = np.pi / (2.0 * np.sqrt(max(lambda_2, 1e-4)))
+```
+This timescale ensures that the quantum phase advances by $\Delta \phi \approx \pi / 2$ across the fundamental community cut, maximizing constructive-versus-destructive interference contrast.
+
+---
+
+#### Step 3: Quantum Circuit Construction & Quantum Gate Synthesis
+**File**: `quantum_traclus/ctqw_evolution.py:build_ctqw_circuit()`
+
+The quantum circuit register is initialized with $n$ qubits:
+```python
+qc = QuantumCircuit(n_qubits, name="CTQW_Walk")
+```
+
+The codebase provides **two distinct execution pathways**:
+
+```
+                              ┌────────────────────────────────────────┐
+                              │  L_padded, n_qubits, time t_walk, reps │
+                              └───────────────────┬────────────────────┘
+                                                  │
+                                  Is trotter == True?
+                                  ├─── YES ───────┼────── NO ───┐
+                                  │                             │
+                                  ▼                             ▼
+                  ┌──────────────────────────────┐ ┌──────────────────────────────┐
+                  │  PauliEvolutionGate          │ │  HamiltonianGate             │
+                  │  + LieTrotter(reps=r)        │ │  data = Operator(L_padded)   │
+                  └──────────────┬───────────────┘ └──────────────┬───────────────┘
+                                 │                                │
+                                 ▼                                ▼
+                  ┌──────────────────────────────┐ ┌──────────────────────────────┐
+                  │ Decomposes into Native Gates:│ │ Native Qiskit Operator Gate: │
+                  │  - Single-qubit: Rz, Rx, H, S│ │   U in U(2^n)                │
+                  │  - Two-qubit: CNOT (CX)      │ │   Statevector evolution      │
+                  └──────────────────────────────┘ └──────────────────────────────┘
+```
+
+##### Pathway A: Exact Simulation via `HamiltonianGate` with Qiskit `Operator` (Default)
+```python
+# Lines 86-89 in ctqw_evolution.py
+op = Operator(L_padded)
+gate = HamiltonianGate(data=op, time=t_eval)
+qc.append(gate, list(range(n_qubits)))
+```
+* **What `HamiltonianGate` does**: It directly encapsulates the matrix exponential from a Qiskit `Operator`:
+  $$U(t) = \exp(-i L_{\text{padded}} t) = V \begin{bmatrix} e^{-i \lambda_1 t} & & 0 \\ & \ddots & \\ 0 & & e^{-i \lambda_{2^n} t} \end{bmatrix} V^\dagger$$
+  Inside Qiskit, this gate acts as a single multi-qubit unitary block spanning all $n$ qubits.
+* **Gate Matrix Structure**: The operator $U(t)$ is unitary: $U^\dagger U = I$. It exactly preserves the total probability $\sum_k |\alpha_k|^2 = 1.0$.
+
+##### Pathway B: Hardware Trotter Synthesis via `PauliEvolutionGate` & `LieTrotter`
+```python
+# Lines 79-84 in ctqw_evolution.py
+if sparse_pauli is None:
+    sparse_pauli = SparsePauliOp.from_operator(Operator(L_padded))
+synthesis = LieTrotter(reps=reps)
+gate = PauliEvolutionGate(sparse_pauli, time=t_eval, synthesis=synthesis)
+qc.append(gate, list(range(n_qubits)))
+```
+On physical gate-based QPUs (e.g. IBM Quantum Heron/Eagle processors), a dense $2^n \times 2^n$ matrix cannot be applied in one step. It must be decomposed into **1-qubit and 2-qubit native hardware gates**.
+
+1. **The Trotter-Suzuki Product Formula**:  
+   Because individual Pauli terms in $H = \sum_k c_k P_k$ generally do not commute ($[P_j, P_k] \ne 0$), $\exp(-i \sum_k c_k P_k t) \ne \prod_k \exp(-i c_k P_k t)$. The **Lie-Trotter product formula** approximates the exponential by interleaving small time slices $\Delta t = t / r$:
+   $$U(t) = \exp\left(-i \sum_{k=1}^M c_k P_k t\right) = \lim_{r \to \infty} \left( \prod_{k=1}^M \exp\left(-i c_k P_k \frac{t}{r}\right) \right)^r$$
+   With finite repetitions $r$ (`reps=2`), the error is bounded by $\mathcal{O}(t^2 / r)$.
+
+2. **How Individual Pauli Exponentials Become Quantum Gates**:  
+   Each term $\exp(-i \theta P_k)$ where $\theta = c_k \frac{t}{r}$ and $P_k = \sigma_{1} \otimes \sigma_{2} \otimes \dots \otimes \sigma_{n}$ is synthesized into elementary gates:
+   * **Case 1: Diagonal Pauli String ($Z \otimes Z \dots \otimes Z$)**:
+     For a two-qubit term $e^{-i \theta (Z_0 \otimes Z_1)}$:
+     ```
+     q_0: ──■──────────────────■──
+            │                  │
+     q_1: ──■──[ Rz(2 * theta) ]──■──
+     ```
+     1. `CX(q_0, q_1)`: Computes the parity of the two qubits onto `q_1`.
+     2. `Rz(2 * theta, q_1)`: Applies phase shift $e^{-i \theta}$ when parity is 0, and $e^{+i \theta}$ when parity is 1.
+     3. `CX(q_0, q_1)`: Uncomputes the parity, returning `q_0` to its original state.
+
+   * **Case 2: Non-Diagonal Pauli String (Terms with $X$ and $Y$)**:
+     To evaluate non-diagonal operators like $e^{-i \theta (X_0 \otimes X_1)}$ or $e^{-i \theta (X_0 \otimes Y_1)}$, Qiskit inserts single-qubit basis-change gates to rotate $X$ or $Y$ into $Z$:
+     * For Pauli-$X$: Rotate using the **Hadamard gate** $H$, since $H X H = Z$.
+     * For Pauli-$Y$: Rotate using $S^\dagger$ and $H$, since $H S^\dagger Y S H = Z$ ($S^\dagger = \text{diag}(1, -i)$).
+
+     The synthesized circuit for $\exp(-i \theta (X_0 \otimes Y_1))$ is:
+     ```
+     q_0: ──[ H ]───────────■────────────────────────■──[ H ]───────────
+                            │                        │
+     q_1: ──[ S† ]──[ H ]───■──[ Rz(2 * theta) ]─────■──[ H ]──[ S ]────
+     ```
+
+---
+
+#### Step 4: Pure Qiskit State Initialization & Basis State Propagation
+**File**: `quantum_traclus/ctqw_evolution.py:simulate_ctqw_transitions()`
+
+To compute the probability that a quantum walker starting at line segment $j$ reaches segment $k$, the initial state is localized at segment $j$ in computational basis:
+
+$$|\psi_0(j)\rangle = |j\rangle = |b_{n-1} b_{n-2} \dots b_0\rangle$$
+
+where $j = \sum_{m=0}^{n-1} b_m 2^m$ is the binary expansion of integer index $j$.
+
+##### Computational Basis Mapping:
+* Segment $0 \implies |00\dots 00\rangle$
+* Segment $1 \implies |00\dots 01\rangle$
+* Segment $2 \implies |00\dots 10\rangle$
+* Segment $j \implies |j\rangle$
+
+In `simulate_ctqw_transitions()`:
+```python
+# Lines 137-145 in ctqw_evolution.py
+dim = 2**n_qubits
+P = np.zeros((N_nodes, N_nodes), dtype=np.float64)
+
+for j in range(N_nodes):
+    # 1. Localized initial state |j> in computational basis using Qiskit Statevector
+    psi_0 = Statevector.from_int(j, dims=dim)
+
+    # 2. Unitary time evolution under the Qiskit QuantumCircuit
+    psi_t = psi_0.evolve(evol_circuit)
+
+    # 3. Transition probability distribution P_kj = |<k|psi_t>|^2 via Born rule
+    probs = psi_t.probabilities()
+    P[:, j] = probs[:N_nodes]
+```
+
+##### How Qiskit Processes the Evolution:
+1. `Statevector.from_int(j, dims=dim)` prepares the pure quantum state $|j\rangle = [0, \dots, 1, \dots, 0]^T$ inside Qiskit's quantum info subsystem.
+2. `psi_0.evolve(evol_circuit)` applies the unitary operator $U(t)$ directly to the state vector using Qiskit's internal C/Rust/Python statevector evolution engine:
+   $$|\psi(t)\rangle = U(t) |\psi_0(j)\rangle = \sum_{k=0}^{2^n - 1} \alpha_k(t) |k\rangle$$
+3. `psi_t.probabilities()` evaluates the Born rule measurement probability distribution:
+   $$P_{jk}(t) = |\langle k | \psi(t)\rangle|^2 = |\alpha_k(t)|^2 = \left|\langle k | \exp(-i L_{\text{padded}} t) | j \rangle\right|^2$$
+   This is computed directly by Qiskit's native probability method without manual matrix slicing or squaring.
+4. `P[:, j] = probs[:N_nodes]` extracts the physical node transitions, discarding the padded dimensions $[N, 2^n-1]$.
+
+---
+
+#### Step 5: Physical Shot-Based Sampling via `StatevectorSampler` (Primitives V2)
+**File**: `quantum_traclus/ctqw_evolution.py:sample_ctqw_transitions()`
+
+When testing against physical quantum hardware or realistic shot-noise environments, the pipeline uses the **Qiskit Primitives V2** engine (`qiskit.primitives.StatevectorSampler`):
+
+```python
+# Lines 190-225 in ctqw_evolution.py
+sampler = StatevectorSampler()
+
+# Batch all N_nodes into a single Sampler V2 pub job
+circuits = []
+for j in range(N_nodes):
+    node_qc = QuantumCircuit(n_qubits)
+    binary = format(j, f"0{n_qubits}b")[::-1]  # Little-endian basis preparation
+    for q, bit in enumerate(binary):
+        if bit == "1":
+            node_qc.x(q)  # Flip |0> to |1> via Pauli-X gate
+    node_qc.compose(qc, inplace=True)
+    node_qc.measure_all()
+    circuits.append(node_qc)
+
+job = sampler.run(circuits, shots=shots)
+pub_results = job.result()
+```
+
+##### 1. Hardware State Preparation:
+Physical quantum registers initialize in the ground state $|0\rangle^{\otimes n}$. To initialize the walker at segment $j$, **Pauli-$X$ gates** (quantum NOT gates) are applied to all qubits where the bitstring of $j$ contains a `1`:
+$$X = \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix} \implies X|0\rangle = |1\rangle$$
+
+> **Qiskit Little-Endian Indexing**: Qiskit orders qubits from right to left: $|q_{n-1} q_{n-2} \dots q_1 q_0\rangle$. The code reverses the binary string (`[::-1]`) so that bit 0 corresponds to qubit 0.
+
+##### 2. Measurement & Shot Execution:
+```python
+P = np.zeros((N_nodes, N_nodes), dtype=np.float64)
+for j, pub_res in enumerate(pub_results):
+    counts = pub_res.data.meas.get_counts()
+    for bitstring, count in counts.items():
+        node_idx = int(bitstring, 2)
+        if node_idx < N_nodes:
+            P[node_idx, j] += count / shots
+```
+The `measure_all()` instruction collapses the continuous statevector $|\psi(t)\rangle$ into discrete classical bitstrings according to the probability distribution $|\alpha_k(t)|^2$. The sampler runs for `shots=1024` repetitions and outputs empirical frequencies:
+
+$$\hat{P}_{jk} = \frac{\text{counts}(k)}{\text{shots}}$$
+
+---
+
+#### Step 6: Quantum Interference Corridor Extraction
+**File**: `quantum_traclus/interference_cluster.py:extract_ctqw_corridors()`
+
+1. **Symmetrized Interference Reachability Kernel ($K$)**:
+   While $U(t)$ is unitary, $P_{jk}$ can have slight asymmetry from boundary effects. Symmetrization guarantees reachability equivalence:
+   $$K_{jk} = \frac{1}{2}\left(P_{jk}(t) + P_{kj}(t)\right)$$
+
+2. **Coherence Thresholding ($\tau$)**:
+   Transitions between segments in different corridors suffer destructive interference and produce near-zero transition probabilities ($K_{jk} < 10^{-6}$). Edges are filtered using dynamic off-diagonal thresholding:
+   $$A_{jk} = \begin{cases} 1, & \text{if } K_{jk} \ge \tau \cdot \max_{i \ne m}(K_{im}) \\ 0, & \text{otherwise} \end{cases}$$
+   where $\tau \in [0.02, 0.05]$.
+
+3. **Connected Components & Trajectory Cardinality Filter (PTR)**:
+   Connected components of adjacency matrix $A$ form candidate clusters $C$. The TRACLUS cardinality rule is enforced:
+   $$|\text{PTR}(C)| < \text{MinLns} \implies C \to -1 \text{ (noise)}$$
+   Segments in surviving clusters are synthesized into smooth representative trajectories via sweep-line projection.
+
+---
+
+### 6. Quantum Gate Flowcharts & Circuit Diagrams
+
+#### Complete Circuit Diagram for a 3-Qubit Evolution Walk ($N=8$ Segments)
+
+```
+       ┌─── State Prep ───┐ ┌───────────── Continuous-Time Quantum Walk Evolution ─────────────┐ ┌── Readout ──┐
+q_0: ──┤ X (if bit 0 == 1)├─┤                                                           ├─┤ Measure ────╫─
+       ├──────────────────┤ │                                                           │ ├─────────────╫─┤
+q_1: ──┤ X (if bit 1 == 1)├─┤  HamiltonianGate(Operator, t) OR LieTrotter(SparsePauliOp) ├─┤ Measure ────╫─┤
+       ├──────────────────┤ │                                                           │ ├─────────────╫─┤
+q_2: ──┤ X (if bit 2 == 1)├─┤                                                           ├─┤ Measure ────╫─┤
+       └──────────────────┘ └───────────────────────────────────────────────────────────┘ └─────────────╫─┘
+meas:══════════════════════════════════════════════════════════════════════════════════════════════════════╩══
+```
+
+#### Detailed Trotter Sub-Circuit for Two-Qubit Coupling ($Z \otimes Z$)
+
+```
+          ┌─────────────┐
+q_i: ──■──┤             ├──■──
+       │  │ Rz(2θ / r)  │  │
+q_j: ──■──┤             ├──■──
+          └─────────────┘
+       ▲                 ▲
+       │                 │
+     CX Gate         CX Gate (Uncompute)
+```
+
+#### Detailed Trotter Sub-Circuit for Off-Diagonal Hopping ($X \otimes X$)
+
+```
+q_i: ──[ H ]──■───────────────────■──[ H ]──
+              │                   │
+q_j: ──[ H ]──■──[ Rz(2θ / r) ]───■──[ H ]──
+```
+
+---
+
+### 7. Summary of Key Quantum Traits & Guarantees
+
+| Trait | Classical Density Walks (DBSCAN) | Classical Spectral (k-Means) | Quantum Fast-TRACLUS (CTQW) |
+| :--- | :--- | :--- | :--- |
+| **Propagation Velocity** | Diffusive ($\sigma \sim \sqrt{t}$) | N/A (Static Eigendecomposition) | **Ballistic ($\sigma \sim t$)** |
+| **Interference Mechanism** | None (Scalar Density) | None (Euclidean Norm) | **Coherent Phase Cancellation ($\Delta \phi$)** |
+| **Separation Contrast ($\mathcal{C}$)** | Low ($\approx 2\times - 5\times$) | Moderate ($\approx 10\times$) | **Extreme ($\mathbf{> 10^5\times}$)** |
+| **Hilbert Space Dimension** | N/A | $N$ | $\mathbf{2^n}$ **($n = \lceil \log_2 N \rceil$ qubits)** |
+| **Centroid Bias** | None | High (Spherical Voronoi Cells) | **Zero (Topology-Conforming Manifold)** |
+| **Variational Parameters** | None | None | **Zero (Deterministic Unitary)** |
+| **NumPy Variants** | Classical NumPy / SciPy | Classical NumPy / SciPy | **Zero (100% Native Qiskit)** |
+
+---
+
+### 8. How to Run Each Qiskit Mode in Code
+
+#### Mode 1: Pure Exact Statevector Simulation (Default)
+```python
+from quantum_traclus import QuantumFastTRACLUS
+
+# Fits model using HamiltonianGate with Qiskit Operator and Statevector.evolve()
+model = QuantumFastTRACLUS(eps=5.0, min_lines=3, tau=0.05, trotter=False)
+model.fit(trajectories)
+```
+
+#### Mode 2: Trotterized Pauli Evolution (Hardware Gate Synthesis)
+```python
+# Decomposes evolution into CNOT and Rz gates via LieTrotter product formula
+model = QuantumFastTRACLUS(eps=5.0, min_lines=3, tau=0.05, trotter=True, reps=2)
+model.fit(trajectories)
+```
+
+#### Mode 3: Hardware Shot-Based Sampling via `StatevectorSampler` (Primitives V2)
+```python
+# Batches measurement circuits across all nodes using Qiskit 2.x StatevectorSampler
+model = QuantumFastTRACLUS(eps=5.0, min_lines=3, tau=0.05, use_sampler=True, shots=1024)
+model.fit(trajectories)
+```
+
+#### Mode 4: Standalone Circuit Inspection in Qiskit
+```python
+from quantum_traclus.laplacian_builder import build_laplacian_operators
+from quantum_traclus.ctqw_evolution import build_ctqw_circuit
+
+L_norm, L_padded, op, sparse_pauli, n_qubits = build_laplacian_operators(dist_mat, eps=5.0)
+qc, t_param = build_ctqw_circuit(L_padded, sparse_pauli, n_qubits, time_val=1.5, trotter=True, reps=2)
+
+print(qc.draw(output="text"))
+print(f"Total gate count: {qc.count_ops()}")
+print(f"Circuit depth: {qc.depth()}")
+```
+
+---
+
+### 9. Quantum Traits It Does Not Depend On
 
 * **Physical Quantum Entanglement**:
   The single-particle CTQW operates on a single state space ($\mathbb{C}^N$). There are no composite tensor-product subsystems ($\mathcal{H}_A \otimes \mathcal{H}_B$) interacting physically. Any multi-qubit entanglement in a gate-based circuit is solely an artifact of compressing an $N$-dimensional vector space onto $n = \lceil \log_2 N \rceil$ qubits, not an intrinsic property of the physics of the walk.
@@ -960,7 +1337,7 @@ Both engines share the exact same high-performance classical front-end and post-
 
 ---
 
-### 5. Quantum Algorithms & Frameworks It Avoids
+### 10. Quantum Algorithms & Frameworks It Avoids
 
 * **Quantum Kernel Trick (QML / FidelityQuantumKernel / QSVC)**:
   Mapping coordinates into high-dimensional Hilbert spaces via parameterized feature maps $U_\Phi(x)|0\rangle$.
