@@ -49,3 +49,6 @@ scratch/
 *.tgz
 datasets/fast_traclus/raw_taxi/
 datasets/fast_traclus/raw_geolife/
+
+# Private documentation
+private_docs/
