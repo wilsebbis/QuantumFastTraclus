@@ -159,6 +159,7 @@ class FastTRACLUS:
         weights: Tuple[float, float, float] = (1.0, 1.0, 1.0),
         gamma: float = 1.0,
         random_state: int = 42,
+        penalty_ratio: float = 0.25,
     ):
         self.eps = eps
         self.min_lines = min_lines
@@ -168,6 +169,7 @@ class FastTRACLUS:
         self.weights = weights
         self.gamma = gamma
         self.random_state = random_state
+        self.penalty_ratio = penalty_ratio
 
         self.segments_: Optional[np.ndarray] = None
         self.traj_ids_: Optional[np.ndarray] = None
@@ -179,7 +181,9 @@ class FastTRACLUS:
     def fit(self, trajectories: List[Union[np.ndarray, list]]) -> "FastTRACLUS":
         """Execute Fast-TRACLUS partitioning, distance matrix broadcast, and modular clustering."""
         # 1. Vectorized MDL Partitioning
-        self.segments_, self.traj_ids_, self.seg_ids_ = partition_trajectories_fast(trajectories)
+        self.segments_, self.traj_ids_, self.seg_ids_ = partition_trajectories_fast(
+            trajectories, penalty_ratio=self.penalty_ratio
+        )
         N = len(self.segments_)
         if N == 0:
             self.labels_ = np.empty(0, dtype=int)

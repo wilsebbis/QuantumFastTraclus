@@ -64,7 +64,10 @@ def vectorized_point_projections(
     return d_perp, d_par
 
 
-def vectorized_mdl_costs_fast(sub_pts: np.ndarray) -> Tuple[float, float]:
+def vectorized_mdl_costs_fast(
+    sub_pts: np.ndarray,
+    penalty_ratio: float = 0.25,
+) -> Tuple[float, float]:
     """Compute Fast-TRACLUS vectorized MDL costs L(H) + L(D|H) vs L(No-Partition)."""
     k = len(sub_pts)
     if k < 2:
@@ -87,10 +90,11 @@ def vectorized_mdl_costs_fast(sub_pts: np.ndarray) -> Tuple[float, float]:
 
     mdl_par = lh + ldh
 
-    # L(No-Partition)
+    # L(No-Partition) with penalty offset
     step_diffs = sub_pts[1:] - sub_pts[:-1]
     step_lens = np.linalg.norm(step_diffs, axis=-1)
-    mdl_nopar = float(np.sum(_safe_log2(step_lens)))
+    raw_nopar = float(np.sum(_safe_log2(step_lens)))
+    mdl_nopar = (1.0 + penalty_ratio) * raw_nopar
 
     return mdl_par, mdl_nopar
 
@@ -98,6 +102,7 @@ def vectorized_mdl_costs_fast(sub_pts: np.ndarray) -> Tuple[float, float]:
 def vectorized_mdl_partition(
     trajectory: Union[np.ndarray, list],
     min_length: float = 1e-4,
+    penalty_ratio: float = 0.25,
 ) -> np.ndarray:
     """Partition a trajectory into characteristic line segments using Fast-TRACLUS vectorized MDL."""
     pts = np.asarray(trajectory, dtype=np.float64)
@@ -123,7 +128,7 @@ def vectorized_mdl_partition(
     while start_idx + length < n_points:
         curr_idx = start_idx + length
         sub_pts = pts[start_idx : curr_idx + 1]
-        cost_par, cost_nopar = vectorized_mdl_costs_fast(sub_pts)
+        cost_par, cost_nopar = vectorized_mdl_costs_fast(sub_pts, penalty_ratio=penalty_ratio)
 
         if cost_par <= cost_nopar:
             length += 1
@@ -142,6 +147,7 @@ def vectorized_mdl_partition(
 def partition_trajectories_fast(
     trajectories: List[Union[np.ndarray, list]],
     min_length: float = 1e-4,
+    penalty_ratio: float = 0.25,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Partition multiple trajectories into a unified segment collection."""
     segments_list = []
@@ -149,7 +155,7 @@ def partition_trajectories_fast(
     seg_ids_list = []
 
     for t_idx, traj in enumerate(trajectories):
-        segs = vectorized_mdl_partition(traj, min_length=min_length)
+        segs = vectorized_mdl_partition(traj, min_length=min_length, penalty_ratio=penalty_ratio)
         if len(segs) > 0:
             segments_list.append(segs)
             traj_ids_list.append(np.full(len(segs), t_idx, dtype=int))

@@ -77,6 +77,9 @@ def build_ctqw_circuit(
         t_eval = float(time_val)
 
     if trotter:
+        if sparse_pauli is None:
+            from qiskit.quantum_info import Operator
+            sparse_pauli = SparsePauliOp.from_operator(Operator(L_padded))
         synthesis = LieTrotter(reps=reps)
         gate = PauliEvolutionGate(sparse_pauli, time=t_eval, synthesis=synthesis)
         qc.append(gate, list(range(n_qubits)))
@@ -126,6 +129,15 @@ def simulate_ctqw_transitions(
         evol_circuit = circuit
 
     dim = 2**n_qubits
+
+    # Fast path for Qiskit HamiltonianGate / unitary operation
+    if len(evol_circuit.data) == 1 and hasattr(evol_circuit.data[0].operation, "to_matrix"):
+        U = evol_circuit.data[0].operation.to_matrix()
+        P = np.abs(U[:N_nodes, :N_nodes])**2
+        col_sums = np.sum(P, axis=0, keepdims=True)
+        P = P / np.maximum(col_sums, 1e-15)
+        return P
+
     P = np.zeros((N_nodes, N_nodes), dtype=np.float64)
 
     for j in range(N_nodes):

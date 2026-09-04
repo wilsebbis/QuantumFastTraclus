@@ -35,6 +35,7 @@ def rotate_points_2d(points: np.ndarray, origin: np.ndarray, phi: float) -> np.n
 
 def iterative_mdl_costs_traclus(
     sub_trajectory: np.ndarray,
+    penalty_ratio: float = 0.25,
 ) -> Tuple[float, float]:
     """Compute MDL_par and MDL_nopar for a candidate segment p_i -> p_k.
 
@@ -42,7 +43,7 @@ def iterative_mdl_costs_traclus(
     evaluates perpendicular and angular distances:
         L(H) = log2(||p_i - p_k||)
         L(D|H) = sum_{m=i}^{k-1} [ log2(d_perp(p_i p_k, p_m p_{m+1})) + log2(d_theta(p_i p_k, p_m p_{m+1})) ]
-        L(No-Partition) = sum_{m=i}^{k-1} log2(||p_m - p_{m+1}||)
+        L(No-Partition) = (1 + penalty_ratio) * sum_{m=i}^{k-1} log2(||p_m - p_{m+1}||)
     """
     pts = np.asarray(sub_trajectory, dtype=np.float64)
     k = len(pts)
@@ -100,11 +101,13 @@ def iterative_mdl_costs_traclus(
 
     mdl_par = lh + ldh
 
-    # 3. No-Partition Length: L(No-Partition)
-    mdl_nopar = 0.0
+    # 3. No-Partition Length: L(No-Partition) with penalty offset
+    raw_nopar = 0.0
     for m in range(k - 1):
         step_len = math.hypot(pts[m + 1, 0] - pts[m, 0], pts[m + 1, 1] - pts[m, 1])
-        mdl_nopar += _safe_log2(step_len)
+        raw_nopar += _safe_log2(step_len)
+
+    mdl_nopar = (1.0 + penalty_ratio) * raw_nopar
 
     return mdl_par, mdl_nopar
 
@@ -112,6 +115,7 @@ def iterative_mdl_costs_traclus(
 def iterative_mdl_partition(
     trajectory: Union[np.ndarray, list],
     min_length: float = 1e-4,
+    penalty_ratio: float = 0.25,
 ) -> np.ndarray:
     """Partition a trajectory into characteristic line segments using TRACLUS iterative MDL.
 
@@ -123,6 +127,8 @@ def iterative_mdl_partition(
         Raw sequence of 2D trajectory coordinates.
     min_length : float, default=1e-4
         Filter out consecutive stationary points.
+    penalty_ratio : float, default=0.25
+        Constant offset added to cost_nopar to suppress overly short segments.
 
     Returns
     -------
@@ -152,7 +158,7 @@ def iterative_mdl_partition(
     while start_idx + length < n_points:
         curr_idx = start_idx + length
         sub_pts = pts[start_idx : curr_idx + 1]
-        cost_par, cost_nopar = iterative_mdl_costs_traclus(sub_pts)
+        cost_par, cost_nopar = iterative_mdl_costs_traclus(sub_pts, penalty_ratio=penalty_ratio)
 
         if cost_par <= cost_nopar:
             length += 1
@@ -171,6 +177,7 @@ def iterative_mdl_partition(
 def partition_trajectories_traclus(
     trajectories: List[Union[np.ndarray, list]],
     min_length: float = 1e-4,
+    penalty_ratio: float = 0.25,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Partition multiple trajectories using TRACLUS iterative MDL."""
     segments_list = []
@@ -178,7 +185,7 @@ def partition_trajectories_traclus(
     seg_ids_list = []
 
     for t_idx, traj in enumerate(trajectories):
-        segs = iterative_mdl_partition(traj, min_length=min_length)
+        segs = iterative_mdl_partition(traj, min_length=min_length, penalty_ratio=penalty_ratio)
         if len(segs) > 0:
             segments_list.append(segs)
             traj_ids_list.append(np.full(len(segs), t_idx, dtype=int))

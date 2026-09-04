@@ -14,6 +14,7 @@ def line_segment_dbscan(
     eps: float,
     min_lines: int,
     weights: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    distance_matrix: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Execute line-segment DBSCAN clustering with the Trajectory Cardinality Filter (Lee et al., 2007).
 
@@ -29,6 +30,8 @@ def line_segment_dbscan(
         Minimum segment count (MinLns) and minimum unique trajectory cardinality.
     weights : tuple of (w_perp, w_par, w_theta), default=(1.0, 1.0, 1.0)
         Weights for distance components.
+    distance_matrix : ndarray of shape (N, N), optional
+        Precomputed line segment distance matrix.
 
     Returns
     -------
@@ -44,7 +47,9 @@ def line_segment_dbscan(
     cluster_id = 0
 
     def region_query(idx: int) -> List[int]:
-        """Sequential loop traversal to compute epsilon-neighborhood."""
+        """Compute epsilon-neighborhood via precomputed matrix or sequential traversal."""
+        if distance_matrix is not None:
+            return np.where(distance_matrix[idx] <= eps)[0].tolist()
         neighbors = []
         target = segments[idx]
         for j in range(N):
@@ -113,11 +118,13 @@ class OriginalTRACLUS:
         min_lines: int = 3,
         weights: Tuple[float, float, float] = (1.0, 1.0, 1.0),
         gamma: float = 1.0,
+        penalty_ratio: float = 0.25,
     ):
         self.eps = eps
         self.min_lines = min_lines
         self.weights = weights
         self.gamma = gamma
+        self.penalty_ratio = penalty_ratio
 
         self.segments_: Optional[np.ndarray] = None
         self.traj_ids_: Optional[np.ndarray] = None
@@ -128,7 +135,9 @@ class OriginalTRACLUS:
     def fit(self, trajectories: List[Union[np.ndarray, list]]) -> "OriginalTRACLUS":
         """Execute Original TRACLUS partitioning, line-DBSCAN grouping, and representative extraction."""
         # 1. Iterative MDL Partitioning
-        self.segments_, self.traj_ids_, self.seg_ids_ = partition_trajectories_traclus(trajectories)
+        self.segments_, self.traj_ids_, self.seg_ids_ = partition_trajectories_traclus(
+            trajectories, penalty_ratio=self.penalty_ratio
+        )
         if len(self.segments_) == 0:
             self.labels_ = np.empty(0, dtype=int)
             return self

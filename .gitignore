@@ -1,10 +1,51 @@
-**/__pycache__/
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.pytest_cache/
-*.egg-info/
-dist/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
 build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
 .venv/
+venv/
+env/
+ENV/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# macOS / OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor configs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary & local scratch files
+scratch/
+*.tmp
+*.log
+
+# Large raw archive downloads and unpacked raw dumps
+# (Downloadable and reproducible on-demand via datasets/download_and_extract_fast_traclus.py)
+*.zip
+*.tar.gz
+*.tgz
+datasets/fast_traclus/raw_taxi/
+datasets/fast_traclus/raw_geolife/
