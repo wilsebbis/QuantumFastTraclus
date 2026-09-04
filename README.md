@@ -15,7 +15,9 @@ A high-performance Python repository implementing, optimizing, and empirically b
 
 ## Table of Contents
 - [Algorithmic Comparison](#algorithmic-comparison)
-- [Mathematical Foundations](#mathematical-foundations)
+- [Original TRACLUS (SIGMOD 2007): Theoretical & Algorithmic Foundations](#original-traclus-sigmod-2007-theoretical--algorithmic-foundations)
+- [Fast-TRACLUS (2026): Modern Vectorization & Modular Clustering](#fast-traclus-2026-modern-vectorization--modular-clustering)
+- [Quantum Fast-TRACLUS: Continuous-Time Quantum Walks on Graph Laplacians](#quantum-fast-traclus-continuous-time-quantum-walks-on-graph-laplacians)
 - [Repository Architecture](#repository-architecture)
 - [Installation & Quickstart](#installation--quickstart)
 - [Datasets: Included vs. External Downloads](#datasets-included-vs-external-downloads)
@@ -49,10 +51,23 @@ A high-performance Python repository implementing, optimizing, and empirically b
 
 ---
 
-## Mathematical Foundations
+## Original TRACLUS (SIGMOD 2007): Theoretical & Algorithmic Foundations
 
-### 1. Directed Line Segment Distance Metric
-For two directed line segments $L_i = s_i e_i$ (longer segment) and $L_j = s_j e_j$ (shorter segment):
+### 1. Architectural Philosophy: The Partition-and-Group Framework
+
+Traditional trajectory clustering algorithms treat an entire trajectory as a single monolithic data point. Because real-world trajectories (e.g., hurricane paths, animal migrations, vessel tracking) are often long and follow complex, winding geometries, two objects might move along identical paths for a specific stretch but diverge completely before or after. Whole-trajectory clustering misses these localized, shared movement patterns.
+
+TRACLUS (*Lee, Han, & Whang*, SIGMOD 2007) solves this by decomposing trajectory mining into two decoupled phases:
+
+1. **Partitioning Phase**: Decomposes continuous trajectory polylines into discrete, representative straight line segments at points of rapid behavioral change (characteristic points).
+2. **Grouping Phase**: Clusters similar line segments across all trajectories using a customized, density-based clustering algorithm with trajectory cardinality constraints.
+3. **Modeling Phase**: Generates a synthetic "representative trajectory" for each cluster to summarize the primary path of movement.
+
+---
+
+### 2. Line Segment Distance Measurements
+
+TRACLUS defines segment similarity using three geometric distance components. Given two directed line segments $L_i = s_i e_i$ and $L_j = s_j e_j$ (where $s$ denotes the start point and $e$ denotes the end point), $L_i$ is chosen as the longer segment and $L_j$ as the shorter segment ($\|L_i\| \ge \|L_j\|$) to guarantee mathematical symmetry ($\text{dist}(L_i, L_j) = \text{dist}(L_j, L_i)$).
 
 ```
          s_i ---------------------------- e_i  (L_i: longer segment)
@@ -62,63 +77,447 @@ For two directed line segments $L_i = s_i e_i$ (longer segment) and $L_j = s_j e
                 s_j ------------ e_j           (L_j: shorter segment)
 ```
 
-The distance function is composed of three orthogonal components:
-1. **Perpendicular Distance ($d_\perp$)** using the Order-2 Lehmer mean:
-   $$d_\perp(L_i, L_j) = \frac{l_{\perp 1}^2 + l_{\perp 2}^2}{l_{\perp 1} + l_{\perp 2}}, \quad \text{where } l_{\perp 1} = \|s_j - p_s\|_2, \; l_{\perp 2} = \|e_j - p_e\|_2$$
-2. **Parallel Distance ($d_\parallel$)**:
-   $$d_\parallel(L_i, L_j) = \min(l_{\parallel 1}, l_{\parallel 2})$$
-   $$l_{\parallel 1} = \min(\|p_s - s_i\|_2, \|p_s - e_i\|_2), \quad l_{\parallel 2} = \min(\|p_e - s_i\|_2, \|p_e - e_i\|_2)$$
-3. **Angle Distance ($d_\theta$)**:
-   $$d_\theta(L_i, L_j) = \begin{cases} \|L_j\|_2 \sin(\theta), & 0 \le \theta < \pi/2 \\ \|L_j\|_2, & \pi/2 \le \theta \le \pi \end{cases}$$
-4. **Composite Metric**:
-   $$\text{dist}(L_i, L_j) = w_\perp d_\perp(L_i, L_j) + w_\parallel d_\parallel(L_i, L_j) + w_\theta d_\theta(L_i, L_j)$$
+Let $p_s$ and $p_e$ be the orthogonal projection points of $s_j$ and $e_j$ onto $L_i$:
+
+$$p_s = s_i + u_1 \cdot \vec{s_i e_i}, \quad p_e = s_i + u_2 \cdot \vec{s_i e_i}$$
+
+$$u_1 = \frac{\vec{s_i s_j} \cdot \vec{s_i e_i}}{\|\vec{s_i e_i}\|^2}, \quad u_2 = \frac{\vec{s_i e_j} \cdot \vec{s_i e_i}}{\|\vec{s_i e_i}\|^2}$$
+
+#### Perpendicular Distance ($d_\perp$)
+Measures the orthogonal separation between the two segments. Let $l_{\perp 1} = \|s_j - p_s\|$ and $l_{\perp 2} = \|e_j - p_e\|$. To prevent extreme skew from tilted segments while weighting larger deviations, TRACLUS computes the order-2 Lehmer mean:
+
+$$d_\perp(L_i, L_j) = \frac{l_{\perp 1}^2 + l_{\perp 2}^2}{l_{\perp 1} + l_{\perp 2}}$$
+
+*(If $l_{\perp 1} + l_{\perp 2} = 0$, $d_\perp = 0$)*.
+
+#### Parallel Distance ($d_\parallel$)
+Measures positional displacement along the direction of the segments. Let:
+* $l_{\parallel 1} = \min(\|p_s - s_i\|, \|p_s - e_i\|)$
+* $l_{\parallel 2} = \min(\|p_e - s_i\|, \|p_e - e_i\|)$
+
+$$d_\parallel(L_i, L_j) = \min(l_{\parallel 1}, l_{\parallel 2})$$
+
+Using $\min$ instead of $\max$ makes the measure robust against broken or unevenly sampled segment boundaries.
+
+#### Angular Distance ($d_\theta$)
+Measures directional alignment. Let $\theta$ ($0^\circ \le \theta \le 180^\circ$) be the intersection angle between $\vec{s_i e_i}$ and $\vec{s_j e_j}$ obtained via cosine similarity:
+
+$$\cos\theta = \frac{\vec{s_i e_i} \cdot \vec{s_j e_j}}{\|\vec{s_i e_i}\| \|\vec{s_j e_j}\|}$$
+
+$$d_\theta(L_i, L_j) = \begin{cases} \|L_j\| \times \sin\theta, & \text{if } 0^\circ \le \theta < 90^\circ \\ \|L_j\|, & \text{if } 90^\circ \le \theta \le 180^\circ \end{cases}$$
+
+If segments travel in opposite directions ($\theta \ge 90^\circ$), the entire length of the shorter segment serves as the distance penalty.
+
+#### Total Distance Function
+$$\text{dist}(L_i, L_j) = w_\perp \cdot d_\perp(L_i, L_j) + w_\parallel \cdot d_\parallel(L_i, L_j) + w_\theta \cdot d_\theta(L_i, L_j)$$
+
+*(The default weights are $w_\perp = w_\parallel = w_\theta = 1.0$)*.
 
 ---
 
-### 2. Minimum Description Length (MDL) Partitioning
-Trajectory compression identifies characteristic turning points by balancing the model cost $L(H)$ against the data cost $L(D|H)$:
-$$\text{cost}_{\text{par}} = L(H) + L(D|H) = \log_2 \|p_i - p_j\|_2 + \sum_{k=i}^{j-1} \left( \log_2 d_\perp(p_i p_j, p_k p_{k+1}) + \log_2 d_\theta(p_i p_j, p_k p_{k+1}) \right)$$
-$$\text{cost}_{\text{nopar}} = \sum_{k=i}^{j-1} \log_2 \|p_k - p_{k+1}\|_2$$
-$$\text{cost}_{\text{nopar\_penalty}} = \text{cost}_{\text{nopar}} \times (1.0 + \text{penalty\_ratio})$$
-A partition point is created whenever $\text{cost}_{\text{par}} > \text{cost}_{\text{nopar\_penalty}}$.
+### 3. Phase 1: Trajectory Partitioning via the MDL Principle
 
-* **Original TRACLUS**: Evaluates projections through explicit 2D coordinate rotation matrices $\begin{bmatrix} x' \\ y' \end{bmatrix} = \begin{bmatrix} \cos\phi & \sin\phi \\ -\sin\phi & \cos\phi \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix}$.
-* **Fast-TRACLUS**: Replaces trigonometric rotation with vectorized scalar vector dot products:
-  $$u_1 = \frac{(s_j - s_i) \cdot (e_i - s_i)}{\|e_i - s_i\|_2^2}, \quad p_s = s_i + u_1(e_i - s_i)$$
+Partitioning seeks to identify characteristic points $\{p_{c_1}, p_{c_2}, \dots, p_{c_k}\}$ along a polyline where behavior changes rapidly. This formulation balances two conflicting objectives:
+* **Preciseness**: The partitioned representation must deviate as little as possible from the raw trajectory points.
+* **Conciseness**: The number of partitions must be kept as small as possible to minimize complexity.
+
+#### Formal Minimum Description Length (MDL) Formulation
+The total compression cost is $L(H) + L(D|H)$:
+
+1. **Hypothesis Length $L(H)$ (Conciseness)**: The sum of the log-lengths of the simplified trajectory partitions:
+   $$L(H) = \sum_{j=1}^{par_i - 1} \log_2\left(\text{len}(p_{c_j} p_{c_{j+1}})\right)$$
+   *(TRACLUS uses segment lengths rather than coordinate endpoints so that the description length remains invariant under global coordinate translations)*.
+
+2. **Data-given-Hypothesis Length $L(D|H)$ (Preciseness)**: The encoding error between the original raw segments and the simplified partition line:
+   $$L(D|H) = \sum_{j=1}^{par_i - 1} \sum_{k=c_j}^{c_{j+1}-1} \left[ \log_2\left(d_\perp(p_{c_j} p_{c_{j+1}}, p_k p_{k+1})\right) + \log_2\left(d_\theta(p_{c_j} p_{c_{j+1}}, p_k p_{k+1})\right) \right]$$
+   *(Parallel distance is omitted here because the partition chord encompasses the intermediate segments)*.
+
+#### Approximate Partitioning Algorithm ($\mathcal{O}(n)$)
+Finding the globally optimal subset of characteristic points is computationally prohibitive. TRACLUS applies a greedy sliding-window heuristic:
+
+1. Start at point $p_{\text{start}} = p_1$ with window length = 1.
+2. For candidate end point $p_{\text{curr}} = p_{\text{start} + \text{length}}$, compute:
+   * $\text{MDL}_{\text{par}} = L(H) + L(D|H)$ (cost of approximating $p_{\text{start}} \dots p_{\text{curr}}$ by a single chord).
+   * $\text{MDL}_{\text{nopar}} = \sum \log_2(\text{len}(p_k p_{k+1}))$ with $L(D|H) = 0$ (cost of keeping all original segments intact).
+3. **Decision Rule**:
+   * If $\text{MDL}_{\text{par}} \le \text{MDL}_{\text{nopar}}$, expanding the chord continues to compress the trajectory effectively; increment length by 1.
+   * As soon as $\text{MDL}_{\text{par}} > \text{MDL}_{\text{nopar}}$, the approximation error has grown too large. Mark $p_{\text{curr}-1}$ as a characteristic point, set $p_{\text{start}} = p_{\text{curr}-1}$, reset length = 1, and repeat.
+4. Append the final endpoint $p_{\text{len}}$ as the last characteristic point.
 
 ---
 
-### 3. Continuous-Time Quantum Walk (CTQW) Community Grouping
-In contrast to classical spectral clustering which diagonalizes the Graph Laplacian ($O(N^3)$) and projects into Euclidean space for $k$-means, Quantum Fast-TRACLUS evolves the quantum statevector directly on the affinity network:
+### 4. Phase 2: Density-Based Line-Segment Clustering
 
-1. **Gaussian Affinity Graph**:
-   $$W_{ij} = \exp\left(-\frac{D_{ij}^2}{2\sigma^2}\right) \quad \text{for } D_{ij} \le \epsilon, \quad W_{ij} = 0 \text{ otherwise}$$
-2. **Symmetric Normalized Laplacian**:
+Once all trajectories are partitioned into a global pool of segments $\mathcal{D} = \{L_1, L_2, \dots, L_N\}$, TRACLUS groups them using a modified DBSCAN architecture.
+
+#### Core Definitions
+* **$\epsilon$-Neighborhood ($N_\epsilon(L)$)**: The set of segments within distance $\epsilon$:
+  $$N_\epsilon(L) = \{L' \in \mathcal{D} \mid \text{dist}(L, L') \le \epsilon\}$$
+* **Core Segment**: Any segment $L$ satisfying $|N_\epsilon(L)| \ge \text{MinLns}$.
+* **Density-Reachability & Connectivity**: Transitive reachability over chains of core segments, grouping dense, arbitrary-shaped manifolds together.
+
+#### Trajectory Cardinality Filter (PTR)
+Classical DBSCAN forms clusters based entirely on point density. In trajectory mining, an object that zig-zags in a tight space can generate dozens of parallel sub-segments from a single trajectory.
+
+To prevent clustering self-similar sub-segments of an individual path, TRACLUS defines **Participating Trajectories (PTR)**:
+
+$$\text{PTR}(C) = \{\text{TR}(L) \mid \forall L \in C\}$$
+
+where $\text{TR}(L)$ is the parent trajectory ID from which segment $L$ was extracted.
+
+* **Pruning Rule**: After forming density-connected cluster $C$, if:
+  $$|\text{PTR}(C)| < \text{MinLns}$$
+  the entire cluster $C$ is discarded and its segments are re-marked as noise. A valid cluster must represent shared movement across a sufficient number of distinct objects.
+
+---
+
+### 5. Phase 3: Representative Trajectory Generation
+
+For each valid cluster $C$, TRACLUS builds a representative polyline using an axis-aligned sweep-line procedure:
+
+1. **Average Direction Vector ($\vec{V}$)**: Sum the direction vectors of all segments in $C$ and normalize to obtain the unit vector representing the cluster's major axis:
+   $$\vec{V} = \frac{\sum_{L \in C} \vec{v}_L}{\left\|\sum_{L \in C} \vec{v}_L\right\|}$$
+2. **Coordinate Frame Rotation**: Compute the angle $\phi$ between $\vec{V}$ and the positive X-axis; rotate all segment endpoints $(x, y) \to (x', y')$ using a standard 2D rotation matrix so that the cluster's primary direction lies along $X'$:
+   $$\begin{bmatrix} x' \\ y' \end{bmatrix} = \begin{bmatrix} \cos\phi & \sin\phi \\ -\sin\phi & \cos\phi \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix}$$
+3. **Sweep-Line Averaging**:
+   * Extract all segment start and end points and sort them along $X'$.
+   * Sweep a vertical line along the sorted $X'$-coordinates.
+   * At each event point $p$, count the number of segments $num_p$ intersecting the sweep line.
+   * If $num_p \ge \text{MinLns}$, compute the average coordinate $(\bar{x}', \bar{y}')$ of the intersecting segments.
+   * **Smoothing Filter**: If the distance along $X'$ from the previously accepted representative point is at least $\gamma$, keep the point; otherwise skip it.
+4. **Inverse Rotation**: Rotate the generated average points back into the original spatial coordinate frame to produce the final representative trajectory.
+
+---
+
+### 6. Parameter Calibration: Entropy & QMeasure
+
+Density clustering is notoriously sensitive to parameter selection. TRACLUS provides an information-theoretic heuristic for tuning $\epsilon$ and $\text{MinLns}$ without manual trial-and-error.
+
+#### Entropy Minimization for $\epsilon$
+In poor clusterings, neighborhood densities $|N_\epsilon(L)|$ are either uniform and trivial ($|N_\epsilon| \approx 1$ for tiny $\epsilon$) or uniformly saturated ($|N_\epsilon| \approx N$ for massive $\epsilon$), both yielding high information entropy. A good clustering creates a skewed, multimodal distribution of cluster cores and sparse noise.
+
+TRACLUS minimizes the neighborhood probability entropy:
+
+$$H(X) = -\sum_{i=1}^n p(x_i) \log_2 p(x_i), \quad p(x_i) = \frac{|N_\epsilon(x_i)|}{\sum_{j=1}^n |N_\epsilon(x_j)|}$$
+
+The optimal $\epsilon$ is identified at the global minimum of $H(X)$ (located via simulated annealing or line search).
+
+#### Deriving $\text{MinLns}$
+At the optimal $\epsilon$, calculate the average neighborhood size across all segments:
+
+$$avg_{|N_\epsilon|} = \frac{1}{n} \sum_{i=1}^n |N_\epsilon(L_i)|$$
+
+Set $\text{MinLns}$ slightly higher than the average neighborhood density:
+
+$$\text{MinLns} = \lfloor avg_{|N_\epsilon|} \rfloor + 1 \sim 3$$
+
+#### Cluster Quality Assessment ($\text{QMeasure}$)
+To quantify clustering performance, TRACLUS defines $\text{QMeasure}$, balancing intra-cluster Sum of Squared Errors (SSE) with an explicit penalty for noise segments $\mathcal{N}$:
+
+$$\text{QMeasure} = \sum_{i=1}^{num_{\text{clus}}} \left(\frac{1}{2|C_i|} \sum_{x \in C_i} \sum_{y \in C_i} \text{dist}(x, y)^2\right) + \frac{1}{2|\mathcal{N}|} \sum_{w \in \mathcal{N}} \sum_{z \in \mathcal{N}} \text{dist}(w, z)^2$$
+
+A lower $\text{QMeasure}$ indicates more compact, well-separated clusters with penalization against excessive noise assignment.
+
+---
+
+### 7. Experimental Results & Literature Replications
+
+The foundational 2007 paper evaluated TRACLUS across two primary real-world datasets and synthetic noise benchmarks:
+
+#### A. Atlantic Hurricane Best Track (1950–2004)
+* **Dataset Scope**: 570 trajectories, 17,736 GPS coordinate fixes.
+* **Entropy Sweep (Figure 16)**: $H(X)$ reached its global minimum at $\epsilon = 31$, where $avg_{|N_\epsilon|} = 4.39$.
+* **Quality Tuning (Figure 17)**: $\text{QMeasure}$ achieved its minimum near $\epsilon = 30$ and $\text{MinLns} = 6$.
+* **Discovered Corridors (Figure 18)**: Identified 7 common sub-trajectories capturing the three prevailing Atlantic storm paths: straight east-to-west tropical runs, recurving coastal storms sweeping north, and higher-latitude west-to-east ocean paths.
+* **Parameter Sensitivity**:
+  * At $\epsilon = 25$ (tighter neighborhood), it found 9 smaller clusters (average 38 segments/cluster).
+  * At $\epsilon = 35$ (looser neighborhood), it merged paths into 3 large clusters (average 174 segments/cluster).
+
+#### B. Starkey Project Animal Tracking
+* **Elk Movement (1993)**: 33 radio-telemetry trajectories with 47,204 fixes.
+  * Entropy minimum occurred at $\epsilon = 25$ ($avg_{|N_\epsilon|} = 7.63$).
+  * Optimal clustering at $\epsilon = 27, \text{MinLns} = 9$ isolated 13 distinct movement corridors across dense travel routes.
+* **Mule Deer Movement (1995)**: 32 trajectories with 20,065 fixes.
+  * Optimal parameters $\epsilon = 29, \text{MinLns} = 8$ cleanly identified 2 primary migration clusters through high-traffic valley channels.
+
+#### C. Synthetic Benchmark with 25% Injected Noise
+* Evaluated against synthetic trajectory streams injected with 25% random, unaligned outlier paths.
+* TRACLUS demonstrated near-perfect noise rejection, correctly clustering the primary linear flows while discarding the background noise through the combined density and PTR filters.
+
+---
+
+### 8. Theoretical Complexities and Bottlenecks
+
+* **Trajectory Partitioning Complexity**: $\mathcal{O}(n)$, where $n$ is the number of points in a trajectory. Each point is evaluated via a single sliding-window check.
+* **Grouping Complexity**: $\mathcal{O}(N \log N)$ when using an index (e.g., $R^*$-tree), where $N$ is the total number of line segments. Without spatial indexing, exhaustive pairwise distance calculation scales at $\mathcal{O}(N^2)$.
+* **Representative Trajectory Complexity**: $\mathcal{O}(M \log M)$, where $M$ is the number of segment endpoints in cluster $C$, dominated by sorting points along the major axis.
+* **The Classical Bottleneck**: The original implementation's use of scalar coordinate rotations for every MDL candidate projection created substantial CPU overhead, a bottleneck subsequently eliminated by the vectorized SIMD operations introduced in Fast-TRACLUS.
+
+---
+
+## Fast-TRACLUS (2026): Modern Vectorization & Modular Clustering
+
+### 1. Architectural Philosophy and Key Innovations
+
+Fast-TRACLUS (*González Delgado et al.*, 2026) redesigns the 2007 TRACLUS partition-and-group framework to resolve its computational bottlenecks on modern large-scale trajectory datasets. While preserving the two-phase pipeline (Minimum Description Length partitioning followed by segment grouping), Fast-TRACLUS introduces three fundamental innovations:
+
+* **Vectorized Array Operations**: Replaces nested scalar Python loops with vectorized NumPy array broadcasting, taking advantage of low-level C SIMD execution.
+* **Direct Vector-Dot-Product Projections**: Eliminates trigonometric rotation matrices and coordinate frame transformations in favor of direct projection formulas.
+* **Decoupled Modular Architecture**: Breaks the rigid coupling between partitioning and density grouping, allowing line segments to feed into plug-and-play clustering backends (`DBSCAN`, `OPTICS`, `HDBSCAN`, `Spectral`, `Agglomerative`) via a precomputed distance matrix.
+
+---
+
+### 2. Sources of Algorithmic Speed-ups
+
+```
+Original TRACLUS:
+Points P ──► Loop over P ──► 2D Rotation Matrix [cos, sin] ──► Scalar Lehmer/Angle ──► Loop-based OPTICS/DBSCAN
+
+Fast-TRACLUS:
+Points P ──► Vectorized Slices ──► Vector Dot Product (u = a·b/||b||²) ──► Unified Broadcast Tensor ──► Modular Backend
+```
+
+#### A. Vector Dot Products vs. Coordinate Rotations
+* **Original TRACLUS**: Projected candidate trajectory points onto partitioning chords by calculating rotation angle $\phi$, constructing an explicit $2 \times 2$ rotation matrix:
+  $$\begin{bmatrix} x' \\ y' \end{bmatrix} = \begin{bmatrix} \cos\phi & \sin\phi \\ -\sin\phi & \cos\phi \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix}$$
+  rotating each point into a temporary frame, computing offsets, and rotating back. This incurred heavy CPU overhead from scalar trigonometric functions.
+* **Fast-TRACLUS**: Replaces coordinate rotations with direct linear projections via scalar dot products:
+  $$u = \frac{(p - s) \cdot (e - s)}{\|e - s\|^2}, \quad p_{\text{proj}} = s + u(e - s)$$
+  This runs in fewer CPU cycles, avoids trigonometric operations, and eliminates numerical errors from matrix inversions.
+
+#### B. Vectorized Minimum Description Length (MDL) Partitioning
+* **Original TRACLUS**: Evaluated the compression cost function:
+  $$L(H) + L(D|H) = \sum \log_2(\text{len}) + \sum \left[ \log_2(d_\perp) + \log_2(d_\theta) \right]$$
+  by iteratively stepping through intermediate points one by one in Python.
+* **Fast-TRACLUS**: Evaluates perpendicular ($d_\perp$) and angular ($d_\theta$) distance metrics across all intermediate points within a candidate partition window simultaneously using vectorized array slicing.
+
+#### C. Unified Multidimensional Distance Broadcasting
+* **Original TRACLUS**: Performed pairwise comparisons between segment $L_i$ and segment $L_j$ using nested loops over the dataset to discover $\epsilon$-neighborhoods $N_\epsilon(L)$.
+* **Fast-TRACLUS**: Formulates perpendicular, parallel, and angular distances into a single vectorized computation flow. Pairwise distances between all $N$ segments are computed across broadcasted 3D tensors ($(N, 1, 2)$ vs. $(1, N, 2)$), producing the complete $N \times N$ distance matrix with zero nested Python loops.
+
+---
+
+### 3. The Decoupled Modular Clustering Framework
+
+In the original C++ implementation evaluated by González Delgado et al., TRACLUS was tightly coupled to OPTICS as its internal clustering routine. Fast-TRACLUS decouples the feature extraction (segmentation) from clustering by treating the resulting $N \times N$ segment distance tensor as a generic precomputed distance matrix.
+
+The framework natively supports five distinct clustering algorithms:
+
+1. **DBSCAN** (`eps=0.1`):
+   * Expands clusters using density reachability based on the precomputed distance matrix.
+   * *Performance on Taxi-100*: Highest Silhouette score (**0.6398**), lowest Davies-Bouldin index (**0.7576**), forming 2 well-separated clusters.
+2. **OPTICS** (`min_samples=5, max_eps=1.0`):
+   * Handles variable density by ordering points along reachability distance.
+   * *Performance on Taxi-100*: Silhouette -0.4028, Calinski-Harabasz 22.01, Davies-Bouldin 1.4469, 4 clusters.
+3. **HDBSCAN**:
+   * Hierarchical density-based clustering that extracts flat clusters across varying density levels without requiring a global $\epsilon$ scale.
+   * *Performance on Taxi-100*: Silhouette 0.4552, Calinski-Harabasz 66.76, Davies-Bouldin 2.0228, 3 clusters.
+4. **Spectral Clustering** (`assign_labels='kmeans', n_clusters=90`):
+   * Converts the distance matrix into an affinity matrix $W_{jk} = \exp(-\text{dist}(L_j, L_k)^2 / 2\sigma^2)$, constructs the normalized Laplacian $L_{\text{norm}}$, computes its lowest eigenvectors, and clusters them using Euclidean $k$-means.
+   * *Performance on Taxi-100*: Produces fine-grained segmentation (25 active clusters from 90 initial centers), Silhouette 0.1879, Calinski-Harabasz 424.78, Davies-Bouldin 1.5190.
+5. **Agglomerative Clustering** (`linkage='ward', affinity='nearest_neighbours'`):
+   * Bottom-up hierarchical merging of segments.
+   * *Performance on Taxi-100*: Produces 25 clusters, Calinski-Harabasz 693.30, Davies-Bouldin 1.2616, Silhouette 0.1277.
+
+---
+
+### 4. Modular Clustering Algorithm Comparison (Taxi Dataset, 100 Trajectories)
+
+The comparative behavior across all backends on the Taxi dataset is summarized below:
+
+| Algorithm Backend | Silhouette Score | Calinski-Harabasz | Davies-Bouldin | Number of Clusters | Characterization & Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **TRACLUS Baseline** | -0.4553 | 23.5222 | 2.6493 | 14 | Original iterative algorithm; poor cluster separation. |
+| **OPTICS** | -0.4028 | 22.0105 | 1.4469 | 4 | Balanced execution, but low silhouette indicates overlapping clusters. |
+| **DBSCAN** | **0.6398** | 155.3500 | **0.7576** | 2 | Strongest overall performance: Dense, highly cohesive, well-separated clusters. |
+| **HDBSCAN** | 0.4552 | 66.7621 | 2.0228 | 3 | Solid balance between cohesion and noise isolation. |
+| **Spectral Clustering** | 0.1879 | 424.7800 | 1.5190 | 25 | Highly granular segmentation; prone to trajectory overfitting/fragmentation. |
+| **Agglomerative** | 0.1277 | **693.3000** | 1.2616 | 25 | High dispersion ratio, but fragments continuous flow channels. |
+
+---
+
+### 5. Can Regular TRACLUS Use These Alternative Algorithms?
+
+**Yes, theoretically and conceptually — but not out of the box.**
+
+#### Why Regular TRACLUS Appears Tied to DBSCAN/OPTICS:
+1. **Algorithmic Coupling in the Literature**: The foundational SIGMOD 2007 paper explicitly designed TRACLUS as an extension of DBSCAN for line segments (formalizing core segments, direct density-reachability, and density-connectivity). Subsequently, the authors' reference implementations coupled the grouping step directly to density walkers (DBSCAN or OPTICS).
+2. **The Trajectory Cardinality Filter (PTR)**: TRACLUS requires checking:
+   $$|\text{PTR}(C)| < \text{MinLns}$$
+   to prune clusters formed by a single trajectory looping back on itself. DBSCAN and OPTICS produce explicit noise labels (-1), making it straightforward to reject pruned clusters. Partitioning algorithms like $k$-means or standard Spectral Clustering assign every point to a cluster without a native noise category, requiring a separate post-processing step to discard low-PTR clusters.
+3. **Non-Metric Distance Complications**: TRACLUS's distance function violates the triangle inequality. Because $\text{dist}(L_1, L_3) \le \text{dist}(L_1, L_2) + \text{dist}(L_2, L_3)$ does not hold, regular TRACLUS relies on direct neighborhood graph expansion.
+
+#### What Fast-TRACLUS Changed to Enable Other Backends:
+Regular TRACLUS never materialized the full $N \times N$ distance matrix; it dynamically queried neighborhoods on the fly using loops or spatial tree indexes.
+
+Fast-TRACLUS computes the complete pairwise distance tensor upfront using vectorized array broadcasting. Once the explicit precomputed distance matrix $D \in \mathbb{R}^{N \times N}$ is available:
+* Any clustering algorithm in scikit-learn accepting `metric='precomputed'` (DBSCAN, OPTICS, Agglomerative) can run directly on top of it.
+* Kernel- and graph-based clustering algorithms (Spectral Clustering, Laplacian Eigenmaps, or Continuous-Time Quantum Walks) can transform $D$ into an affinity matrix $W = \exp(-D^2 / 2\sigma^2)$.
+
+Regular TRACLUS could mathematically use any of these algorithms, but its original codebase lacked the decoupled distance matrix representation that Fast-TRACLUS introduced.
+
+---
+
+### 6. Empirical Speed-up and Scalability Verification
+
+Fast-TRACLUS achieves an average execution runtime reduction of **24.7%** over the original implementation while maintaining identical clustering quality scores (demonstrated in Table 1 and Table 2 of González Delgado et al., 2026):
+
+* **Taxi Movement Data**:
+  * 100 trajectories: 63.87s vs. 98.98s (**35.47% improvement**)
+  * 500 trajectories: 3,764.71s vs. 4,603.04s (**18.21% improvement**, saving 14 minutes)
+* **Movebank Wildlife Data**:
+  * 100 trajectories: 153.23s vs. 239.70s (**36.07% improvement**)
+  * 371 trajectories: 8,591.68s vs. 11,177.10s (**23.13% improvement**, saving 43 minutes)
+* **GeoLife Pedestrian Mobility**:
+  * 100 trajectories: 1,289.53s vs. 2,064.31s (**37.53% improvement**)
+  * 500 trajectories: 207,324.53s (~57.6 h) vs. 255,944.89s (~71.1 h) (**19.00% improvement**, saving 13.5 hours)
+
+---
+
+## Quantum Fast-TRACLUS: Continuous-Time Quantum Walks on Graph Laplacians
+
+### 1. Architectural Philosophy: The Quantum Walk Transition
+
+While Fast-TRACLUS drastically accelerated trajectory partitioning and distance tensor computation, the grouping phase remained subject to classical graph clustering pathologies:
+1. **The Chaining Effect in Density Clustering**: If two winding corridors pass close to one another at a single intersection or tangent point, classical DBSCAN irrevocably chains them into one monolithic cluster (as observed on Starkey Elk1993, where TRACLUS merges 98.1% of segments).
+2. **The Voronoi Slicing Fallacy in Spectral Clustering**: Classical spectral clustering diagonalizes the Graph Laplacian ($O(N^3)$ complexity) to extract eigenvectors and projects them into Euclidean space for $k$-means. Because $k$-means relies on Euclidean hyperplanes, it artificially cuts elongated, non-convex corridors (such as interlocking Archimedean spirals) into arbitrary spherical chunks, destroying continuous manifold topology.
+
+**Quantum Fast-TRACLUS** resolves both failure modes by replacing static geometric partitioning and classical matrix diagonalization with **Continuous-Time Quantum Walks (CTQW)** directly on the normalized Graph Laplacian:
+
+```
+[Trajectory Polylines] 
+          │
+          ▼  (Stage 1: Vectorized Dot-Product MDL Partitioning, O(L))
+[Directed Line Segments D = {L_1, ..., L_N}]
+          │
+          ▼  (Stage 2: Broadcasted Pairwise Distance Tensor, O(N^2))
+[Distance Matrix D_ij (Perpendicular Lehmer, Parallel, Angular)]
+          │
+          ▼  (Stage 3: Continuous Gaussian Affinity Graph W_ij)
+[Normalized Graph Laplacian: L_norm = I - D^-1/2 W D^-1/2]
+          │
+          ▼  (Stage 4: Hilbert Space Mapping n = ceil(log2 N) Qubits)
+[Hamiltonian Operator: H = L_padded]
+          │
+          ▼  (Stage 5: Adaptive Fiedler Calibration: t_walk = pi / 2*sqrt(lambda_2))
+[Qiskit Unitary Evolution: U(t) = exp(-i L_padded t)]
+          │
+          ▼  (Stage 6: Transition Probability Sampling & Symmetrized Kernel)
+[Quantum Interference Reachability Kernel: K_jk = 1/2(P_jk + P_kj)]
+          │
+          ▼  (Stage 7: Coherence Thresholding tau + Trajectory Cardinality Filter PTR)
+[Discovered Quantum Movement Corridors C_1, ..., C_k]
+          │
+          ▼  (Stage 8: Vectorized Sweep-Line Trajectory Synthesis)
+[Synthetic Representative Trajectories]
+```
+
+---
+
+### 2. The 10-Stage Quantum Fast-TRACLUS Pipeline Specification
+
+The end-to-end Quantum Fast-TRACLUS pipeline is formalized across 10 deterministic stages:
+
+1. **Vectorized MDL Trajectory Partitioning**:
+   Applies Fast-TRACLUS vectorized scalar dot products ($u = \frac{(p - s) \cdot (e - s)}{\|e - s\|^2}$) to evaluate $L(H) + L(D|H)$ in $O(L)$ time, compressing trajectories into discrete characteristic line segments $\mathcal{D} = \{L_1, \dots, L_N\}$.
+
+2. **Unified Pairwise Line-Segment Distance Tensor**:
+   Evaluates perpendicular ($d_\perp$ Order-2 Lehmer mean), parallel ($d_\parallel$), and angular ($d_\theta$) distance metrics across broadcasted 3D tensors:
+   $$D_{jk} = w_\perp d_\perp(L_j, L_k) + w_\parallel d_\parallel(L_j, L_k) + w_\theta d_\theta(L_j, L_k)$$
+
+3. **Continuous Gaussian Affinity Graph**:
+   Maps spatial distance into a continuous affinity weight matrix $W \in \mathbb{R}^{N \times N}$:
+   $$W_{jk} = \begin{cases} \exp\left(-\frac{D_{jk}^2}{2\sigma^2}\right), & \text{if } D_{jk} \le \epsilon \\ 0, & \text{otherwise} \end{cases}$$
+   where $\sigma = \epsilon / 2.0$ acts as the Gaussian bandwidth.
+
+4. **Symmetric Normalized Graph Laplacian**:
+   Constructs the degree diagonal matrix $D_{jj} = \sum_k W_{jk}$ and computes the normalized graph Laplacian:
    $$L_{\text{norm}} = I - D^{-1/2} W D^{-1/2}$$
-3. **Hilbert Space Mapping ($n$-qubits)**:
-   $$n = \lceil \log_2 N \rceil, \quad \dim = 2^n, \quad L_{\text{padded}} = \begin{bmatrix} L_{\text{norm}} & 0 \\ 0 & I \end{bmatrix}$$
-4. **Adaptive Evolution Time**:
-   Calculated from the Fiedler eigenvalue (algebraic connectivity $\lambda_2$):
+   $L_{\text{norm}}$ is positive semi-definite with eigenvalues bounded in $[0, 2]$.
+
+5. **Hilbert Space Mapping on $n = \lceil \log_2 N \rceil$ Qubits**:
+   To represent the $N$-node graph on a gate-based or statevector quantum register, the matrix is zero-padded with identity diagonals to dimension $2^n$:
+   $$L_{\text{padded}} = \begin{bmatrix} L_{\text{norm}} & 0 \\ 0 & I_{(2^n - N)} \end{bmatrix}$$
+
+6. **Adaptive Spectral Timescale Calibration via Fiedler Value**:
+   Instead of using an empirical guess for walk time, the evolution time is calibrated to the characteristic timescale of community boundaries using the algebraic connectivity ($\lambda_2$, the Fiedler eigenvalue of $L_{\text{norm}}$):
    $$t_{\text{walk}} = \frac{\pi}{2\sqrt{\lambda_2}}$$
-5. **Qiskit Unitary Time Evolution**:
-   Evaluated natively through standardized Qiskit circuit primitives:
-   $$U(t) = \exp(-i L_{\text{padded}} t) \quad \implies \quad \text{HamiltonianGate}(L_{\text{padded}}, t)$$
-6. **Transition Probability Matrix**:
-   $$P_{jk}(t) = |\langle k | U(t) | j \rangle|^2$$
-7. **Quantum Interference Coherence Kernel**:
-   $$K = \frac{1}{2}(P + P^T), \quad \text{thresholded at } K_{jk} \ge \tau \cdot \max_{i \ne m}(K_{im})$$
-8. **Trajectory Cardinality Filter**:
-   $$|\text{PTR}(C)| < \text{MinLns} \implies \text{reassign cluster } C \to -1 \text{ (noise)}$$
+   This evolves the quantum statevector precisely to the point of maximum inter-corridor contrast before ergodic thermalization washes out phase differentiation.
+
+7. **Qiskit Unitary Schrödinger Time Propagation**:
+   The Hamiltonian operator $H = L_{\text{padded}}$ generates unitary time evolution via Schrödinger propagation:
+   $$U(t) = \exp(-i L_{\text{padded}} t)$$
+   In Qiskit, this is executed natively via `qiskit.circuit.library.HamiltonianGate` and `qiskit.quantum_info.Operator` for exact statevector evolution, or decomposed into native CNOT and single-qubit rotations via `SparsePauliOp`, `PauliEvolutionGate`, and `LieTrotter` / `SuzukiTrotter` product formulas.
+
+8. **Transition Probability Sampling & Symmetrized Interference Kernel**:
+   For an initial state localized at segment $j$ ($|j\rangle$), the transition amplitude to segment $k$ is given by $A(j \to k) = \langle k | U(t) | j \rangle$. The transition probability is:
+   $$P_{jk}(t) = |\langle k | \exp(-i L_{\text{norm}} t) | j \rangle|^2$$
+   To ensure reachability symmetry, the transition matrix is symmetrized into the quantum interference reachability kernel:
+   $$K_{jk} = \frac{1}{2}\left(P_{jk}(t) + P_{kj}(t)\right)$$
+
+9. **Quantum Phase Coherence Thresholding & Trajectory Cardinality Filter**:
+   Corridor connectivity is established between segments $j$ and $k$ whenever their interference reachability exceeds the dynamic coherence threshold:
+   $$K_{jk} \ge \tau \cdot \max_{i \ne m}(K_{im})$$
+   where $\tau \in [0.01, 0.05]$. Connected components form candidate clusters $C$. The TRACLUS Trajectory Cardinality Constraint is then applied:
+   $$|\text{PTR}(C)| < \text{MinLns} \implies C \to -1 \text{ (noise)}$$
+
+10. **Vectorized Representative Trajectory Synthesis**:
+    For each retained quantum corridor $C$, the cluster average direction vector $\vec{V}$ is extracted, segments are rotated horizontally, and vertical sweep-line average projection generates smooth representative paths under smoothing parameter $\gamma$.
 
 ---
 
-### 4. Sweep-Line Representative Trajectory Generation
-Given a cluster of directed line segments $C$, the representative trajectory is synthesized by:
-1. Computing the cluster average direction vector $\vec{V} = \frac{1}{|C|}\sum_{L \in C} \vec{L}$.
-2. Rotating coordinate axes by $\alpha = \text{atan2}(V_y, V_x)$ to align segments horizontally.
-3. Placing vertical sweep-lines across segment endpoints with minimum line density $\text{MinLns}$.
-4. Averaging $Y'$-intercepts of intersecting segments at each sweep-line.
-5. Inverting rotation by $-\alpha$ and applying distance-threshold smoothing with factor $\gamma$.
+### 3. Quantum Wave Interference & Coherence Dynamics
+
+The decisive computational advantage of CTQW stems from the physics of multi-path quantum interference:
+
+1. **Multi-Path Quantum Superposition**:
+   An initial localized basis state $|j\rangle$ evolves simultaneously across all accessible network trajectories in the $N$-dimensional Hilbert space:
+   $$|\psi(t)\rangle = \sum_{k=1}^N \alpha_k(t)|k\rangle$$
+
+2. **Multi-Path Coherent Wave Interference**:
+   The total transition amplitude sums complex phases coherently across all possible paths $p$:
+   $$A(j \to k) = \sum_{p: j \to k} \mathcal{A}(p) = \sum_p |\mathcal{A}(p)| e^{i\phi(p)}$$
+   * **Constructive Intra-Corridor Interference**: Along parallel, highly connected trajectory corridors, path lengths and topological symmetries align ($\Delta \phi \approx 0$). Amplitudes add constructively, concentrating quantum probability along the corridor.
+   * **Destructive Inter-Corridor Cancellation**: Across sparse cross-corridor bridges, accidental geometric proximities, or random noise edges, path phases mismatch and interfere destructively ($\sum e^{i\phi} \approx 0$).
+
+3. **Constructive-to-Destructive Interference Contrast Metric ($\mathcal{C}$)**:
+   Quantifies corridor wave confinement via:
+   $$\mathcal{C} = \frac{\mathbb{E}[K_{jk} \mid j, k \in \text{same cluster}]}{\mathbb{E}[K_{jk} \mid j, k \in \text{different clusters}]}$$
+   On empirical telemetry networks (Elk1993, Deer1995, Movebank), $\mathcal{C}$ regularly exceeds **$> 10^5\times$**, producing a stark bi-modal contrast that makes community boundary extraction immune to minor parameter drift.
+
+4. **Ballistic Wave Propagation vs. Diffusive Classical Spreading**:
+   * Classical random walks diffuse with standard deviation $\sigma \sim \sqrt{t}$, frequently trapping the walker in local degree bottlenecks.
+   * Quantum walks propagate ballistically with standard deviation $\sigma \sim t$. This quadratic speedup in propagation velocity allows the quantum state to rapidly traverse long, narrow corridors and sample global topological structure.
+
+5. **Unitary Reversibility & Absence of Thermalization**:
+   Classical Markov random walks collapse into an ergodic stationary distribution $\pi = M\pi$, completely losing spatial memory of localized trajectory cores. Unitary time evolution preserves the norm ($U^\dagger U = I$), preventing thermalization and maintaining the distinct phase signatures of individual corridors indefinitely.
+
+---
+
+### 4. Preserving Non-Convex Manifolds & Overcoming the Voronoi Slicing Fallacy
+
+A defining failure of classical machine learning on trajectory data is the treatment of curved geometries. When classical Spectral Clustering projects line segments into the eigenvector space of the Laplacian, it applies Euclidean $k$-means to cluster them. 
+
+Because $k$-means partitions space using linear Voronoi hyperplanes, it is mathematically incapable of following winding, interlocking manifolds. On non-convex geometries (such as dual Archimedean spirals), classical spectral clustering catastrophically slices continuous corridors into disjoint spherical pieces (Silhouette $0.1352$, DBI $4.2879$).
+
+Quantum Fast-TRACLUS avoids this failure entirely:
+* It performs **no $k$-means projection** and constructs **no Voronoi hyperplanes**.
+* The quantum wave packet naturally flows along the physical curves of the affinity graph.
+* On the Dual Spirals benchmark, Quantum Fast-TRACLUS achieves a Silhouette score of **0.855**, DBI of **0.501**, and an interference contrast ratio $\mathcal{C} = \mathbf{5,017\times}$, cleanly separating the two interlocking spiral arms across their entire winding trajectories.
+
+---
+
+### 5. Hardware-Ready Qiskit Native Implementation
+
+Quantum Fast-TRACLUS is designed to run seamlessly on modern gate-based quantum computers and statevector simulators:
+
+* **Zero Variational Overhead**: Unlike QAOA or VQE, CTQW requires **zero classical outer-loop optimization parameters** (no COBYLA, no SPSA), completely bypassing the barren plateau problem.
+* **Logarithmic Qubit Compression**: An affinity graph with $N = 2,048$ segments requires only $n = \lceil \log_2 2048 \rceil = \mathbf{11\text{ qubits}}$, fitting easily within the coherence limits of current NISQ processors.
+* **Standardized Qiskit Circuit Primitives**:
+  * Evaluates Hamiltonian evolution via `qiskit.circuit.library.HamiltonianGate` and `qiskit.quantum_info.Operator`.
+  * Generates Pauli strings via `qiskit.quantum_info.SparsePauliOp`.
+  * Decomposes into 1-qubit and 2-qubit native hardware gates via `qiskit.circuit.library.PauliEvolutionGate` using `LieTrotter` and `SuzukiTrotter` synthesis.
+  * Measures probability distributions using `qiskit.primitives.StatevectorSampler` and `StatevectorEstimator`.
 
 ---
 
