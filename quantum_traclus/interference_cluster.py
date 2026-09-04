@@ -12,6 +12,7 @@ from .laplacian_builder import build_laplacian_operators
 from .ctqw_evolution import (
     build_ctqw_circuit,
     simulate_ctqw_transitions,
+    sample_ctqw_transitions,
     compute_adaptive_walk_time,
 )
 
@@ -98,6 +99,8 @@ class QuantumFastTRACLUS:
         sigma: Optional[float] = None,
         trotter: bool = False,
         reps: int = 2,
+        use_sampler: bool = False,
+        shots: int = 1024,
         weights: Tuple[float, float, float] = (1.0, 1.0, 1.0),
         gamma: float = 1.0,
     ):
@@ -108,6 +111,8 @@ class QuantumFastTRACLUS:
         self.sigma = sigma
         self.trotter = trotter
         self.reps = reps
+        self.use_sampler = use_sampler
+        self.shots = shots
         self.weights = weights
         self.gamma = gamma
 
@@ -156,13 +161,26 @@ class QuantumFastTRACLUS:
             reps=self.reps,
         )
 
-        self.P_ = simulate_ctqw_transitions(
-            circuit=qc,
-            n_qubits=n_qubits,
-            N_nodes=N,
-            time_val=self.t_used_,
-            t_param=t_param,
-        )
+        if self.use_sampler:
+            # Physical shot-based sampling via Qiskit Primitives V2 StatevectorSampler
+            self.P_ = sample_ctqw_transitions(
+                circuit=qc,
+                n_qubits=n_qubits,
+                N_nodes=N,
+                source_node=None,
+                shots=self.shots,
+                time_val=self.t_used_,
+                t_param=t_param,
+            )
+        else:
+            # Native Qiskit Statevector unitary propagation and Born rule probability extraction
+            self.P_ = simulate_ctqw_transitions(
+                circuit=qc,
+                n_qubits=n_qubits,
+                N_nodes=N,
+                time_val=self.t_used_,
+                t_param=t_param,
+            )
 
         # 6. Quantum Interference Corridor Extraction
         self.labels_, self.K_ = extract_ctqw_corridors(

@@ -6,7 +6,9 @@ import numpy as np
 import scipy.sparse.linalg as spla
 from qiskit.circuit import QuantumCircuit, Parameter
 from qiskit.circuit.library import HamiltonianGate, PauliEvolutionGate
-from qiskit.quantum_info import Statevector, SparsePauliOp
+from qiskit.circuit import QuantumCircuit, Parameter
+from qiskit.circuit.library import HamiltonianGate, PauliEvolutionGate
+from qiskit.quantum_info import Statevector, SparsePauliOp, Operator
 from qiskit.synthesis import LieTrotter, SuzukiTrotter
 from qiskit.primitives import StatevectorSampler
 
@@ -56,7 +58,7 @@ def build_ctqw_circuit(
         Concrete evolution time t. If None, binds a symbolic Qiskit Parameter('t').
     trotter : bool, default=False
         If True, synthesizes via PauliEvolutionGate with LieTrotter product formula.
-        If False, creates an exact HamiltonianGate.
+        If False, creates an exact HamiltonianGate with Qiskit Operator.
     reps : int, default=2
         Number of Trotter synthesis repetitions.
 
@@ -78,14 +80,14 @@ def build_ctqw_circuit(
 
     if trotter:
         if sparse_pauli is None:
-            from qiskit.quantum_info import Operator
             sparse_pauli = SparsePauliOp.from_operator(Operator(L_padded))
         synthesis = LieTrotter(reps=reps)
         gate = PauliEvolutionGate(sparse_pauli, time=t_eval, synthesis=synthesis)
         qc.append(gate, list(range(n_qubits)))
     else:
-        # Exact Hamiltonian unitary gate simulation
-        gate = HamiltonianGate(data=L_padded, time=t_eval)
+        # Exact Hamiltonian unitary gate simulation using native Qiskit Operator
+        op = Operator(L_padded)
+        gate = HamiltonianGate(data=op, time=t_eval)
         qc.append(gate, list(range(n_qubits)))
 
     return qc, t_param
@@ -130,14 +132,6 @@ def simulate_ctqw_transitions(
 
     dim = 2**n_qubits
 
-    # Fast path for Qiskit HamiltonianGate / unitary operation
-    if len(evol_circuit.data) == 1 and hasattr(evol_circuit.data[0].operation, "to_matrix"):
-        U = evol_circuit.data[0].operation.to_matrix()
-        P = np.abs(U[:N_nodes, :N_nodes])**2
-        col_sums = np.sum(P, axis=0, keepdims=True)
-        P = P / np.maximum(col_sums, 1e-15)
-        return P
-
     P = np.zeros((N_nodes, N_nodes), dtype=np.float64)
 
     for j in range(N_nodes):
@@ -162,7 +156,7 @@ def sample_ctqw_transitions(
     circuit: QuantumCircuit,
     n_qubits: int,
     N_nodes: int,
-    source_node: int,
+    source_node: Optional[int] = None,
     shots: int = 1024,
     time_val: Optional[float] = None,
     t_param: Optional[Parameter] = None,
@@ -177,44 +171,78 @@ def sample_ctqw_transitions(
         Number of qubits.
     N_nodes : int
         Number of graph nodes.
-    source_node : int
-        Source node j.
+    source_node : int, optional
+        Source node j. If None, samples all N_nodes in a single batched StatevectorSampler job.
     shots : int, default=1024
         Number of measurement shots.
+    time_val : float, optional
+        Walk time value.
+    t_param : Parameter, optional
+        Symbolic parameter object in circuit.
 
     Returns
     -------
-    prob_dist : ndarray of shape (N_nodes,)
-        Sampled empirical probability distribution over nodes.
+    prob_dist : ndarray of shape (N_nodes,) or (N_nodes, N_nodes)
+        Sampled empirical probability distribution over nodes, or full transition matrix P
+        if source_node is None.
     """
     if t_param is not None and time_val is not None:
         qc = circuit.assign_parameters({t_param: time_val})
     else:
         qc = circuit.copy()
 
-    # Initialize state at source_node
-    full_qc = QuantumCircuit(n_qubits)
-    binary = format(source_node, f"0{n_qubits}b")[::-1]  # Qiskit little-endian
-    for q, bit in enumerate(binary):
-        if bit == "1":
-            full_qc.x(q)
-
-    full_qc.compose(qc, inplace=True)
-    full_qc.measure_all()
-
     sampler = StatevectorSampler()
-    job = sampler.run([(full_qc)], shots=shots)
-    pub_res = job.result()[0]
-    counts = pub_res.data.meas.get_counts()
 
-    probs = np.zeros(N_nodes, dtype=np.float64)
-    for bitstring, count in counts.items():
-        # Reverse bitstring for standard integer index
-        node_idx = int(bitstring, 2)
-        if node_idx < N_nodes:
-            probs[node_idx] += count / shots
+    if source_node is not None:
+        # Single source node sampling
+        full_qc = QuantumCircuit(n_qubits)
+        binary = format(source_node, f"0{n_qubits}b")[::-1]  # Qiskit little-endian
+        for q, bit in enumerate(binary):
+            if bit == "1":
+                full_qc.x(q)
 
-    total = np.sum(probs)
-    if total > 0:
-        probs /= total
-    return probs
+        full_qc.compose(qc, inplace=True)
+        full_qc.measure_all()
+
+        job = sampler.run([(full_qc)], shots=shots)
+        pub_res = job.result()[0]
+        counts = pub_res.data.meas.get_counts()
+
+        probs = np.zeros(N_nodes, dtype=np.float64)
+        for bitstring, count in counts.items():
+            node_idx = int(bitstring, 2)
+            if node_idx < N_nodes:
+                probs[node_idx] += count / shots
+
+        total = np.sum(probs)
+        if total > 0:
+            probs /= total
+        return probs
+
+    # Batch all N_nodes into a single Sampler V2 pub job
+    circuits = []
+    for j in range(N_nodes):
+        node_qc = QuantumCircuit(n_qubits)
+        binary = format(j, f"0{n_qubits}b")[::-1]
+        for q, bit in enumerate(binary):
+            if bit == "1":
+                node_qc.x(q)
+        node_qc.compose(qc, inplace=True)
+        node_qc.measure_all()
+        circuits.append(node_qc)
+
+    job = sampler.run(circuits, shots=shots)
+    pub_results = job.result()
+
+    P = np.zeros((N_nodes, N_nodes), dtype=np.float64)
+    for j, pub_res in enumerate(pub_results):
+        counts = pub_res.data.meas.get_counts()
+        for bitstring, count in counts.items():
+            node_idx = int(bitstring, 2)
+            if node_idx < N_nodes:
+                P[node_idx, j] += count / shots
+        col_sum = np.sum(P[:, j])
+        if col_sum > 0:
+            P[:, j] /= col_sum
+
+    return P

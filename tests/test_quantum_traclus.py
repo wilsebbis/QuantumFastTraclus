@@ -71,10 +71,15 @@ def test_sample_ctqw_transitions():
     L_norm, L_padded, op, sparse_pauli, n_qubits = build_laplacian_operators(D, eps=5.0)
     qc, _ = build_ctqw_circuit(L_padded, sparse_pauli, n_qubits, time_val=1.0)
 
-    # Sample from node 0
+    # 1. Single node sample
     sampled_probs = sample_ctqw_transitions(qc, n_qubits, N_nodes=2, source_node=0, shots=256)
     assert len(sampled_probs) == 2
     assert np.isclose(np.sum(sampled_probs), 1.0)
+
+    # 2. Batch full transition matrix sample
+    P_sampled = sample_ctqw_transitions(qc, n_qubits, N_nodes=2, source_node=None, shots=256)
+    assert P_sampled.shape == (2, 2)
+    assert np.allclose(np.sum(P_sampled, axis=0), 1.0)
 
 
 def test_quantum_fast_traclus_pipeline():
@@ -83,6 +88,7 @@ def test_quantum_fast_traclus_pipeline():
     t2 = [np.column_stack([np.linspace(0, 30, 10), np.random.normal(25.0, 0.1, 10)]) for _ in range(3)]
     all_trajs = t1 + t2
 
+    # Mode 1: Exact Statevector propagation
     model = QuantumFastTRACLUS(eps=6.0, min_lines=3, tau=0.03)
     model.fit(all_trajs)
 
@@ -92,3 +98,17 @@ def test_quantum_fast_traclus_pipeline():
     assert len(valid) == 2
     reps = model.get_representative_trajectories()
     assert len(reps) == 2
+
+    # Mode 2: Trotterized Pauli product formula
+    model_trotter = QuantumFastTRACLUS(eps=6.0, min_lines=3, tau=0.03, trotter=True, reps=2)
+    model_trotter.fit(all_trajs)
+    assert model_trotter.labels_ is not None
+    valid_t = np.unique(model_trotter.labels_[model_trotter.labels_ >= 0])
+    assert len(valid_t) == 2
+
+    # Mode 3: Shot-based Sampler V2 primitive
+    model_sampler = QuantumFastTRACLUS(eps=6.0, min_lines=3, tau=0.03, use_sampler=True, shots=256)
+    model_sampler.fit(all_trajs)
+    assert model_sampler.labels_ is not None
+    valid_s = np.unique(model_sampler.labels_[model_sampler.labels_ >= 0])
+    assert len(valid_s) == 2
